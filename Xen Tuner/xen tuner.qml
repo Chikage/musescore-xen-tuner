@@ -39,20 +39,19 @@ MuseScore {
     menuPath: "Plugins.Xen Tuner.Start Xen Tuner"
     readonly property int logTextRows: 7
     readonly property int minLogTextRows: 3
-    readonly property int logTextPointSize: 9
-    readonly property int controlTextPointSize: 9
-    readonly property int quitTextPointSize: 13
+    // Point sizes follow Linux font DPI and can be scaled again by Qt's device scale.
+    readonly property int logTextPixelSize: 12
+    readonly property int controlTextPixelSize: 12
+    readonly property int quitTextPixelSize: 17
     readonly property int logTextPadding: 8
     readonly property int minControlRowHeight: 28
     readonly property int controlVerticalPadding: 10
-    readonly property real highDpiScale: Math.max(1, Screen.devicePixelRatio || 1)
-    readonly property bool layoutMetricsAreScaled: Qt.platform.os == "linux" && highDpiScale > 1 && controlTextMetrics.lineSpacing > controlTextPointSize * 2.2
-    readonly property real controlLineSpacing: scaledLayoutMetric(controlTextMetrics.lineSpacing)
-    readonly property real quitLineSpacing: scaledLayoutMetric(quitTextMetrics.lineSpacing)
-    readonly property real logLineSpacing: scaledLayoutMetric(logTextMetrics.lineSpacing)
+    readonly property real controlLineSpacing: controlTextMetrics.lineSpacing
+    readonly property real quitLineSpacing: quitTextMetrics.lineSpacing
+    readonly property real logLineSpacing: logTextMetrics.lineSpacing
     readonly property int controlRowHeight: Math.max(minControlRowHeight, Math.ceil(Math.max(controlLineSpacing, quitLineSpacing) + controlVerticalPadding))
-    readonly property real controlCharWidth: Math.max(1, scaledLayoutMetric(controlTextMetrics.averageCharacterWidth || controlTextMetrics.lineSpacing / 2))
-    readonly property real quitCharWidth: Math.max(1, scaledLayoutMetric(quitTextMetrics.averageCharacterWidth || quitTextMetrics.lineSpacing / 2))
+    readonly property real controlCharWidth: Math.max(1, controlTextMetrics.averageCharacterWidth || controlTextMetrics.lineSpacing / 2)
+    readonly property real quitCharWidth: Math.max(1, quitTextMetrics.averageCharacterWidth || quitTextMetrics.lineSpacing / 2)
     readonly property int controlHorizontalPadding: Math.max(8, Math.ceil(controlCharWidth * 2))
     readonly property int controlCornerRadius: Math.max(4, Math.ceil(controlRowHeight / 5))
     readonly property int iconButtonWidth: Math.max(controlRowHeight, Math.ceil(quitCharWidth * 2 + controlHorizontalPadding))
@@ -93,23 +92,17 @@ MuseScore {
 
     FontMetrics {
         id: logTextMetrics
-        font.pointSize: pluginId.logTextPointSize
+        font.pixelSize: pluginId.logTextPixelSize
     }
 
     FontMetrics {
         id: controlTextMetrics
-        font.pointSize: pluginId.controlTextPointSize
+        font.pixelSize: pluginId.controlTextPixelSize
     }
 
     FontMetrics {
         id: quitTextMetrics
-        font.pointSize: pluginId.quitTextPointSize
-    }
-
-    function scaledLayoutMetric(value) {
-        if (value === undefined || value === null)
-            return 0;
-        return layoutMetricsAreScaled ? value / highDpiScale : value;
+        font.pixelSize: pluginId.quitTextPixelSize
     }
 
     function buildFilteredAuxChainOptions(maxChainIndex) {
@@ -218,7 +211,7 @@ MuseScore {
                 Layout.maximumHeight: pluginId.controlRowHeight
                 implicitHeight: pluginId.controlRowHeight
                 padding: 0
-                font.pointSize: pluginId.quitTextPointSize
+                font.pixelSize: pluginId.quitTextPixelSize
                 onClicked: {
                     pluginId.allowClose = true;
                     handleClose();
@@ -228,7 +221,7 @@ MuseScore {
                     radius: pluginId.controlCornerRadius;color: quitButton.pressed ? "#E74C3C" : "#C0392B"
                 }
                 contentItem: Text {
-                    text: quitButton.text;color: "white";font.pointSize: quitButton.font.pointSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter
+                    text: quitButton.text;color: "white";font.pixelSize: quitButton.font.pixelSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter
                 }
             }
 
@@ -241,7 +234,7 @@ MuseScore {
                 Layout.minimumHeight: pluginId.controlRowHeight
                 Layout.maximumHeight: pluginId.controlRowHeight
                 implicitHeight: pluginId.controlRowHeight
-                font.pointSize: pluginId.controlTextPointSize
+                font.pixelSize: pluginId.controlTextPixelSize
                 leftPadding: pluginId.controlHorizontalPadding
                 rightPadding: pluginId.controlHorizontalPadding
                 onClicked: pluginId.openKeySignatureFileDialog()
@@ -249,7 +242,7 @@ MuseScore {
                     radius: pluginId.controlCornerRadius;color: loadKeySignatureButton.pressed ? "#27AE60" : "#1E8449"
                 }
                 contentItem: Text {
-                    text: loadKeySignatureButton.text;color: "white";font.pointSize: loadKeySignatureButton.font.pointSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
+                    text: loadKeySignatureButton.text;color: "white";font.pixelSize: loadKeySignatureButton.font.pixelSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
                 }
             }
 
@@ -263,7 +256,7 @@ MuseScore {
                 Layout.minimumHeight: pluginId.controlRowHeight
                 Layout.maximumHeight: pluginId.controlRowHeight
                 implicitHeight: pluginId.controlRowHeight
-                font.pointSize: pluginId.controlTextPointSize
+                font.pixelSize: pluginId.controlTextPixelSize
                 leftPadding: pluginId.controlHorizontalPadding
                 rightPadding: pluginId.controlHorizontalPadding
                 onClicked: pluginId.runEnharmonicCycle()
@@ -271,7 +264,7 @@ MuseScore {
                     radius: pluginId.controlCornerRadius;color: enharmonicButton.pressed ? "#3498DB" : "#2980B9"
                 }
                 contentItem: Text {
-                    text: enharmonicButton.text;color: "white";font.pointSize: enharmonicButton.font.pointSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
+                    text: enharmonicButton.text;color: "white";font.pixelSize: enharmonicButton.font.pixelSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
                 }
             }
         }
@@ -316,7 +309,7 @@ MuseScore {
                             anchors.rightMargin: pluginId.controlHorizontalPadding
                             text: auxButtonGroupRow.auxLabel
                             color: "#2C3E50"
-                            font.pointSize: pluginId.controlTextPointSize
+                            font.pixelSize: pluginId.controlTextPixelSize
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                             elide: Text.ElideRight
@@ -333,7 +326,7 @@ MuseScore {
                         Layout.minimumHeight: pluginId.controlRowHeight
                         Layout.maximumHeight: pluginId.controlRowHeight
                         implicitHeight: pluginId.controlRowHeight
-                        font.pointSize: pluginId.controlTextPointSize
+                        font.pixelSize: pluginId.controlTextPixelSize
                         leftPadding: pluginId.controlHorizontalPadding
                         rightPadding: pluginId.controlHorizontalPadding
                         onClicked: pluginId.runAuxChainTranspose(1, auxButtonGroupRow.auxIndex)
@@ -341,7 +334,7 @@ MuseScore {
                             radius: pluginId.controlCornerRadius;color: auxUpButton.pressed ? "#27AE60" : "#1E8449"
                         }
                         contentItem: Text {
-                            text: auxUpButton.text;color: "white";font.pointSize: auxUpButton.font.pointSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
+                            text: auxUpButton.text;color: "white";font.pixelSize: auxUpButton.font.pixelSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
                         }
                     }
 
@@ -354,7 +347,7 @@ MuseScore {
                         Layout.minimumHeight: pluginId.controlRowHeight
                         Layout.maximumHeight: pluginId.controlRowHeight
                         implicitHeight: pluginId.controlRowHeight
-                        font.pointSize: pluginId.controlTextPointSize
+                        font.pixelSize: pluginId.controlTextPixelSize
                         leftPadding: pluginId.controlHorizontalPadding
                         rightPadding: pluginId.controlHorizontalPadding
                         onClicked: pluginId.runAuxChainTranspose(-1, auxButtonGroupRow.auxIndex)
@@ -362,7 +355,7 @@ MuseScore {
                             radius: pluginId.controlCornerRadius;color: auxDownButton.pressed ? "#E67E22" : "#D35400"
                         }
                         contentItem: Text {
-                            text: auxDownButton.text;color: "white";font.pointSize: auxDownButton.font.pointSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
+                            text: auxDownButton.text;color: "white";font.pixelSize: auxDownButton.font.pixelSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
                         }
                     }
                 }
@@ -390,7 +383,7 @@ MuseScore {
                 Layout.minimumHeight: pluginId.controlRowHeight
                 Layout.maximumHeight: pluginId.controlRowHeight
                 implicitHeight: pluginId.controlRowHeight
-                font.pointSize: pluginId.controlTextPointSize
+                font.pixelSize: pluginId.controlTextPixelSize
                 leftPadding: pluginId.controlHorizontalPadding
                 rightPadding: pluginId.controlHorizontalPadding
                 background: Rectangle {
@@ -410,7 +403,7 @@ MuseScore {
                 Layout.minimumHeight: pluginId.controlRowHeight
                 Layout.maximumHeight: pluginId.controlRowHeight
                 implicitHeight: pluginId.controlRowHeight
-                font.pointSize: pluginId.controlTextPointSize
+                font.pixelSize: pluginId.controlTextPixelSize
                 leftPadding: pluginId.controlHorizontalPadding
                 rightPadding: pluginId.controlHorizontalPadding
                 Component.onCompleted: pluginId.clampFilteredAuxChainInput()
@@ -433,7 +426,7 @@ MuseScore {
                 Layout.minimumHeight: pluginId.controlRowHeight
                 Layout.maximumHeight: pluginId.controlRowHeight
                 implicitHeight: pluginId.controlRowHeight
-                font.pointSize: pluginId.controlTextPointSize
+                font.pixelSize: pluginId.controlTextPixelSize
                 leftPadding: pluginId.controlHorizontalPadding
                 rightPadding: pluginId.controlHorizontalPadding
                 onClicked: pluginId.runFilteredAuxChainTranspose(1, filteredAuxTargetInput.currentText, filteredAuxChainInput.currentText)
@@ -441,7 +434,7 @@ MuseScore {
                     radius: pluginId.controlCornerRadius;color: filteredAuxUpButton.pressed ? "#27AE60" : "#1E8449"
                 }
                 contentItem: Text {
-                    text: filteredAuxUpButton.text;color: "white";font.pointSize: filteredAuxUpButton.font.pointSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
+                    text: filteredAuxUpButton.text;color: "white";font.pixelSize: filteredAuxUpButton.font.pixelSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
                 }
             }
 
@@ -455,7 +448,7 @@ MuseScore {
                 Layout.minimumHeight: pluginId.controlRowHeight
                 Layout.maximumHeight: pluginId.controlRowHeight
                 implicitHeight: pluginId.controlRowHeight
-                font.pointSize: pluginId.controlTextPointSize
+                font.pixelSize: pluginId.controlTextPixelSize
                 leftPadding: pluginId.controlHorizontalPadding
                 rightPadding: pluginId.controlHorizontalPadding
                 onClicked: pluginId.runFilteredAuxChainTranspose(-1, filteredAuxTargetInput.currentText, filteredAuxChainInput.currentText)
@@ -463,7 +456,7 @@ MuseScore {
                     radius: pluginId.controlCornerRadius;color: filteredAuxDownButton.pressed ? "#E67E22" : "#D35400"
                 }
                 contentItem: Text {
-                    text: filteredAuxDownButton.text;color: "white";font.pointSize: filteredAuxDownButton.font.pointSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
+                    text: filteredAuxDownButton.text;color: "white";font.pixelSize: filteredAuxDownButton.font.pixelSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
                 }
             }
         }
@@ -495,7 +488,7 @@ MuseScore {
                 implicitHeight: pluginId.logAreaHeight
                 height: Math.max(implicitHeight, logScrollView.availableHeight)
                 text: "Xen Tuner is running."
-                font.pointSize: pluginId.logTextPointSize
+                font.pixelSize: pluginId.logTextPixelSize
                 color: "#2C3E50"
                 readOnly: true
                 selectByMouse: true

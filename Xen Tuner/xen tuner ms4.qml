@@ -38,20 +38,19 @@ MuseScore {
         "Make sure you only have 1 instance of this plugin running at a time."
       readonly property int logTextRows: 7
       readonly property int minLogTextRows: 3
-      readonly property int logTextPointSize: 8
-      readonly property int controlTextPointSize: 8
-      readonly property int quitTextPointSize: 10
+      // Point sizes follow Linux font DPI and can be scaled again by Qt's device scale.
+      readonly property int logTextPixelSize: 11
+      readonly property int controlTextPixelSize: 11
+      readonly property int quitTextPixelSize: 13
       readonly property int logTextPadding: 6
       readonly property int minControlRowHeight: 20
       readonly property int controlVerticalPadding: 6
-      readonly property real highDpiScale: Math.max(1, Screen.devicePixelRatio || 1)
-      readonly property bool layoutMetricsAreScaled: Qt.platform.os == "linux" && highDpiScale > 1 && controlTextMetrics.lineSpacing > controlTextPointSize * 2.2
-      readonly property real controlLineSpacing: scaledLayoutMetric(controlTextMetrics.lineSpacing)
-      readonly property real quitLineSpacing: scaledLayoutMetric(quitTextMetrics.lineSpacing)
-      readonly property real logLineSpacing: scaledLayoutMetric(logTextMetrics.lineSpacing)
+      readonly property real controlLineSpacing: controlTextMetrics.lineSpacing
+      readonly property real quitLineSpacing: quitTextMetrics.lineSpacing
+      readonly property real logLineSpacing: logTextMetrics.lineSpacing
       readonly property int controlRowHeight: Math.max(minControlRowHeight, Math.ceil(Math.max(controlLineSpacing, quitLineSpacing) + controlVerticalPadding))
-      readonly property real controlCharWidth: Math.max(1, scaledLayoutMetric(controlTextMetrics.averageCharacterWidth || controlTextMetrics.lineSpacing / 2))
-      readonly property real quitCharWidth: Math.max(1, scaledLayoutMetric(quitTextMetrics.averageCharacterWidth || quitTextMetrics.lineSpacing / 2))
+      readonly property real controlCharWidth: Math.max(1, controlTextMetrics.averageCharacterWidth || controlTextMetrics.lineSpacing / 2)
+      readonly property real quitCharWidth: Math.max(1, quitTextMetrics.averageCharacterWidth || quitTextMetrics.lineSpacing / 2)
       readonly property int controlHorizontalPadding: Math.max(6, Math.ceil(controlCharWidth * 2))
       readonly property int controlCornerRadius: Math.max(3, Math.ceil(controlRowHeight / 6))
       readonly property int iconButtonWidth: Math.max(controlRowHeight, Math.ceil(quitCharWidth * 2 + controlHorizontalPadding))
@@ -86,23 +85,17 @@ MuseScore {
 
       FontMetrics {
         id: logTextMetrics
-        font.pointSize: pluginId.logTextPointSize
+        font.pixelSize: pluginId.logTextPixelSize
       }
 
       FontMetrics {
         id: controlTextMetrics
-        font.pointSize: pluginId.controlTextPointSize
+        font.pixelSize: pluginId.controlTextPixelSize
       }
 
       FontMetrics {
         id: quitTextMetrics
-        font.pointSize: pluginId.quitTextPointSize
-      }
-
-      function scaledLayoutMetric(value) {
-        if (value === undefined || value === null)
-          return 0;
-        return layoutMetricsAreScaled ? value / highDpiScale : value;
+        font.pixelSize: pluginId.quitTextPixelSize
       }
 
       function ensureInitialPanelSize() {
@@ -217,7 +210,7 @@ GridLayout {
             Layout.maximumHeight: pluginId.controlRowHeight
             implicitHeight: pluginId.controlRowHeight
             padding: 0
-            font.pointSize: pluginId.quitTextPointSize
+            font.pixelSize: pluginId.quitTextPixelSize
             onClicked: {
                 pluginId.allowClose = true;
                 handleClose();
@@ -225,7 +218,7 @@ GridLayout {
             }
             contentItem: Text {
                 text: quitButton.text
-                font.pointSize: quitButton.font.pointSize
+                font.pixelSize: quitButton.font.pixelSize
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
             }
@@ -240,7 +233,7 @@ GridLayout {
             Layout.minimumHeight: pluginId.controlRowHeight
             Layout.maximumHeight: pluginId.controlRowHeight
             implicitHeight: pluginId.controlRowHeight
-            font.pointSize: pluginId.controlTextPointSize
+            font.pixelSize: pluginId.controlTextPixelSize
             leftPadding: pluginId.controlHorizontalPadding
             rightPadding: pluginId.controlHorizontalPadding
             onClicked: pluginId.openKeySignatureFileDialog()
@@ -256,7 +249,7 @@ GridLayout {
             Layout.minimumHeight: pluginId.controlRowHeight
             Layout.maximumHeight: pluginId.controlRowHeight
             implicitHeight: pluginId.controlRowHeight
-            font.pointSize: pluginId.controlTextPointSize
+            font.pixelSize: pluginId.controlTextPixelSize
             leftPadding: pluginId.controlHorizontalPadding
             rightPadding: pluginId.controlHorizontalPadding
             onClicked: pluginId.runEnharmonicCycle()
@@ -302,7 +295,7 @@ GridLayout {
                         anchors.leftMargin: pluginId.controlHorizontalPadding
                         anchors.rightMargin: pluginId.controlHorizontalPadding
                         text: auxButtonGroupRow.auxLabel
-                        font.pointSize: pluginId.controlTextPointSize
+                        font.pixelSize: pluginId.controlTextPixelSize
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                         elide: Text.ElideRight
@@ -318,7 +311,7 @@ GridLayout {
                     Layout.minimumHeight: pluginId.controlRowHeight
                     Layout.maximumHeight: pluginId.controlRowHeight
                     implicitHeight: pluginId.controlRowHeight
-                    font.pointSize: pluginId.controlTextPointSize
+                    font.pixelSize: pluginId.controlTextPixelSize
                     leftPadding: pluginId.controlHorizontalPadding
                     rightPadding: pluginId.controlHorizontalPadding
                     onClicked: pluginId.runAuxChainTranspose(1, auxButtonGroupRow.auxIndex)
@@ -332,7 +325,7 @@ GridLayout {
                     Layout.minimumHeight: pluginId.controlRowHeight
                     Layout.maximumHeight: pluginId.controlRowHeight
                     implicitHeight: pluginId.controlRowHeight
-                    font.pointSize: pluginId.controlTextPointSize
+                    font.pixelSize: pluginId.controlTextPixelSize
                     leftPadding: pluginId.controlHorizontalPadding
                     rightPadding: pluginId.controlHorizontalPadding
                     onClicked: pluginId.runAuxChainTranspose(-1, auxButtonGroupRow.auxIndex)
@@ -368,7 +361,7 @@ GridLayout {
             implicitHeight: pluginId.logAreaHeight
             height: Math.max(implicitHeight, logScrollView.availableHeight)
             text: "Xen Tuner is running."
-            font.pointSize: pluginId.logTextPointSize
+            font.pixelSize: pluginId.logTextPixelSize
             color: "black"
             readOnly: true
             selectByMouse: true

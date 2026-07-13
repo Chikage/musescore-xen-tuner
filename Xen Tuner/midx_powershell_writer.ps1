@@ -7,7 +7,7 @@ $fallbackDebugPath = Join-Path $scriptDir "midx_writer_job.debug.log"
 $debugPath = $fallbackDebugPath
 
 if (Test-Path -LiteralPath $jobPath) {
-    Get-Content -LiteralPath $jobPath | ForEach-Object {
+    Get-Content -LiteralPath $jobPath -Encoding UTF8 | ForEach-Object {
         if ($_ -like "debug_path=*") {
             $value = $_.Substring("debug_path=".Length)
             if ($value) {

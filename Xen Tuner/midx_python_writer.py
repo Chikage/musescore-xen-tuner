@@ -18,6 +18,7 @@ OFFSET_CENT_RANGE = 64.0
 OFFSET_MAGNITUDE_STEPS = 32768.0
 DEFAULT_TICKS_PER_QUARTER = 480
 DEFAULT_TEMPO_US_PER_QUARTER = 500000
+DEFAULT_PITCH_BEND_RANGE_SEMITONES = 2.0
 MIDI2_CLIP_HEADER = b"SMF2CLIP"
 MIDI2_MAX_DELTA_CLOCKSTAMP = 0xFFFFF
 SYSTEM_EVENT_DATA_LENGTHS = {
@@ -35,7 +36,7 @@ SYSTEM_EVENT_DATA_LENGTHS = {
 
 def read_job(job_path):
     job = {}
-    with open(job_path, "r") as infile:
+    with open(job_path, "r", encoding="utf-8-sig") as infile:
         for raw_line in infile:
             line = raw_line.rstrip("\n")
             if not line or "=" not in line:
@@ -952,6 +953,110 @@ def write_hex_payload(hex_path, output_path, debug_path):
     log(debug_path, "WROTE %d bytes to %s" % (len(data), output_path))
 
 
+def write_pitch_bend_midi(input_path, output_path, bend_range_semitones, debug_path):
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+    from midx_pitch_bend_converter import convert_file
+
+    stats = convert_file(input_path, output_path, bend_range_semitones)
+    log(debug_path, "PITCH_BEND_OUTPUT_PATH=%s" % output_path)
+    log(debug_path, "PITCH_BEND_OUTPUT_SIZE=%d" % stats["output_bytes"])
+    log(debug_path, "PITCH_BEND_INPUT_FORMAT=%s" % stats["input_format"])
+    log(debug_path, "PITCH_BEND_NOTES=%d" % stats["notes"])
+    log(debug_path, "PITCH_BEND_CHANNELS_USED=%d" % stats["channels_used"])
+    log(debug_path, "PITCH_BEND_CHANNEL_STEALS=%d" % stats["channel_steals"])
+    log(debug_path, "PITCH_BEND_CLIPPED=%d" % stats["clipped_bends"])
+    log(debug_path, "PITCH_BEND_PERCUSSION_NOTES=%d" % stats["percussion_notes"])
+    log(debug_path, "PITCH_BEND_PERCUSSION_OFFSETS_IGNORED=%d" % stats["percussion_offsets_ignored"])
+    log(debug_path, "PITCH_BEND_RANGE_SEMITONES=%s" % bend_range_semitones)
+    return stats
+
+
+def remove_if_exists(path):
+    if path and os.path.exists(path):
+        os.unlink(path)
+
+
+def staged_path(path):
+    return path + ".xen-tuner.tmp"
+
+
+def commit_staged_outputs(outputs, completion_path, pitch_bend_stats):
+    for temporary_path, output_path, expected_header in outputs:
+        if not os.path.exists(temporary_path):
+            raise ValueError("staged output is missing: %s" % temporary_path)
+        if os.path.getsize(temporary_path) <= len(expected_header):
+            raise ValueError("staged output is empty or truncated: %s" % temporary_path)
+        with open(temporary_path, "rb") as infile:
+            if infile.read(len(expected_header)) != expected_header:
+                raise ValueError("staged output has an invalid header: %s" % temporary_path)
+
+    transaction_id = binascii.hexlify(os.urandom(8)).decode("ascii")
+    backups = []
+    committed = []
+    try:
+        for _temporary_path, output_path, _expected_header in outputs:
+            backup_path = output_path + ".xen-tuner.backup." + transaction_id
+            if os.path.exists(output_path):
+                os.replace(output_path, backup_path)
+                backups.append((backup_path, output_path))
+            else:
+                backups.append((None, output_path))
+
+        for temporary_path, output_path, _expected_header in outputs:
+            os.replace(temporary_path, output_path)
+            committed.append(output_path)
+
+        write_completion_file(completion_path, pitch_bend_stats)
+    except BaseException:
+        try:
+            remove_if_exists(completion_path)
+        except OSError:
+            pass
+        for output_path in committed:
+            try:
+                remove_if_exists(output_path)
+            except OSError:
+                pass
+        for backup_path, output_path in backups:
+            if backup_path and os.path.exists(backup_path):
+                try:
+                    os.replace(backup_path, output_path)
+                except OSError:
+                    pass
+        raise
+    else:
+        for backup_path, _output_path in backups:
+            try:
+                remove_if_exists(backup_path)
+            except OSError:
+                pass
+
+
+def write_completion_file(path, pitch_bend_stats):
+    if not path:
+        return
+    temporary_path = path + ".tmp"
+    remove_if_exists(temporary_path)
+    try:
+        with open(temporary_path, "w", encoding="utf-8", newline="\n") as outfile:
+            outfile.write("status=ok\n")
+            if pitch_bend_stats:
+                for key in (
+                    "notes",
+                    "channels_used",
+                    "channel_steals",
+                    "clipped_bends",
+                    "percussion_notes",
+                    "percussion_offsets_ignored",
+                ):
+                    outfile.write("pitch_bend_%s=%s\n" % (key, pitch_bend_stats.get(key, 0)))
+        os.replace(temporary_path, path)
+    finally:
+        remove_if_exists(temporary_path)
+
+
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     job_path = os.path.join(script_dir, "midx_writer_job.txt")
@@ -969,7 +1074,15 @@ def main():
     offset_path = job.get("offset_path", "")
     output_path = job.get("output_path", "")
     midi2_output_path = job.get("midi2_output_path", "")
+    pitch_bend_output_path = job.get("pitch_bend_output_path", "")
+    completion_path = job.get("completion_path", "")
     ticks_per_quarter = parse_int(job.get("ticks_per_quarter", ""), 0)
+    try:
+        pitch_bend_range_semitones = float(
+            job.get("pitch_bend_range_semitones", DEFAULT_PITCH_BEND_RANGE_SEMITONES)
+        )
+    except Exception:
+        pitch_bend_range_semitones = DEFAULT_PITCH_BEND_RANGE_SEMITONES
     debug_path = job.get("debug_path", fallback_debug_path)
 
     log(debug_path, "HELPER_PATH=%s" % os.path.abspath(__file__))
@@ -982,18 +1095,43 @@ def main():
     log(debug_path, "OFFSET_PATH=%s" % offset_path)
     log(debug_path, "OUTPUT_PATH=%s" % output_path)
     log(debug_path, "MIDI2_OUTPUT_PATH=%s" % midi2_output_path)
+    log(debug_path, "PITCH_BEND_OUTPUT_PATH=%s" % pitch_bend_output_path)
+    log(debug_path, "COMPLETION_PATH=%s" % completion_path)
+    log(debug_path, "PITCH_BEND_RANGE_SEMITONES=%s" % pitch_bend_range_semitones)
     log(debug_path, "TICKS_PER_QUARTER=%s" % ticks_per_quarter)
 
+    pitch_bend_stats = None
+    staged_outputs = []
     try:
+        remove_if_exists(completion_path)
         if native_midi_path and offset_path:
             log(debug_path, "MODE=native_midi_inject")
-            inject_midx(native_midi_path, offset_path, output_path, debug_path)
+            staged_midx_path = staged_path(output_path)
+            staged_outputs.append((staged_midx_path, output_path, b"MThd"))
+            remove_if_exists(staged_midx_path)
+            inject_midx(native_midi_path, offset_path, staged_midx_path, debug_path)
             if midi2_output_path:
                 log(debug_path, "MODE_MIDI2=native_midi_to_midi2")
-                write_midi2_from_native(native_midi_path, offset_path, midi2_output_path, ticks_per_quarter, debug_path)
+                staged_midi2_path = staged_path(midi2_output_path)
+                staged_outputs.append((staged_midi2_path, midi2_output_path, MIDI2_CLIP_HEADER))
+                remove_if_exists(staged_midi2_path)
+                write_midi2_from_native(native_midi_path, offset_path, staged_midi2_path, ticks_per_quarter, debug_path)
+            if pitch_bend_output_path:
+                log(debug_path, "MODE_PITCH_BEND=midx_to_pitch_bend_midi")
+                staged_pitch_bend_path = staged_path(pitch_bend_output_path)
+                staged_outputs.append((staged_pitch_bend_path, pitch_bend_output_path, b"MThd"))
+                remove_if_exists(staged_pitch_bend_path)
+                pitch_bend_stats = write_pitch_bend_midi(
+                    staged_midx_path,
+                    staged_pitch_bend_path,
+                    pitch_bend_range_semitones,
+                    debug_path,
+                )
+            commit_staged_outputs(staged_outputs, completion_path, pitch_bend_stats)
         else:
             log(debug_path, "MODE=hex_write")
             write_hex_payload(hex_path, output_path, debug_path)
+            write_completion_file(completion_path, pitch_bend_stats)
         log(debug_path, "OUTPUT_EXISTS=%s" % os.path.exists(output_path))
         if os.path.exists(output_path):
             log(debug_path, "OUTPUT_SIZE=%d" % os.path.getsize(output_path))
@@ -1001,11 +1139,21 @@ def main():
             log(debug_path, "MIDI2_EXISTS=%s" % os.path.exists(midi2_output_path))
             if os.path.exists(midi2_output_path):
                 log(debug_path, "MIDI2_SIZE=%d" % os.path.getsize(midi2_output_path))
+        if pitch_bend_output_path:
+            log(debug_path, "PITCH_BEND_EXISTS=%s" % os.path.exists(pitch_bend_output_path))
+            if os.path.exists(pitch_bend_output_path):
+                log(debug_path, "PITCH_BEND_SIZE=%d" % os.path.getsize(pitch_bend_output_path))
         return 0
     except Exception as exc:
         log(debug_path, "ERROR_TYPE=%s" % exc.__class__.__name__)
         log(debug_path, "ERROR: %s" % exc)
         return 1
+    finally:
+        for temporary_path, _output_path, _expected_header in staged_outputs:
+            try:
+                remove_if_exists(temporary_path)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

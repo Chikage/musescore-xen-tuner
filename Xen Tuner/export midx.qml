@@ -1,6 +1,6 @@
-// Standalone MIDX exporter for MuseScore plugins.
-// Exports MuseScore's native MIDI, then injects compact MIDX microtonal
-// side records beside the original note-on/off events.
+// Standalone microtonal MIDI exporter for MuseScore plugins.
+// Exports MuseScore's native MIDI, then writes MIDX, MIDI 2.0, and
+// MIDI 1.0 pitch-bend representations of the microtonal notes.
 
 import MuseScore 3.0
 import QtQuick 2.9
@@ -9,8 +9,8 @@ import QtQuick.Dialogs 1.1
 import FileIO 3.0
 
 MuseScore {
-      version: "0.3.8"
-      description: "Exports the score/selection as a .midx file. MIDX preserves native MIDI data and stores microtonal offsets as compact side records."
+      version: "0.3.9"
+      description: "Exports the score/selection as MIDX, MIDI 2.0, and MIDI 1.0 with pitch-bend events."
       menuPath: "Plugins.Xen Tuner.Export MIDX"
 
       id: pluginId
@@ -19,6 +19,7 @@ MuseScore {
       readonly property int midxOffsetSteps: 32768
       readonly property int midxExperimentalManufacturerId: 0x7D
       readonly property int midxPitchedOffsetRecordType: 0x03
+      readonly property real pitchBendRangeSemitones: 2.0
 
       Component.onCompleted : {
         if (mscoreMajorVersion >= 4) {
@@ -359,6 +360,25 @@ MuseScore {
         return fileIO.write(text);
       }
 
+      function readKeyValueFile(path) {
+        var values = {};
+        fileIO.source = path;
+        var text = "";
+        try {
+          text = "" + fileIO.read();
+        } catch (e) {
+          return values;
+        }
+        var lines = text.split(/\r?\n/);
+        for (var i = 0; i < lines.length; i++) {
+          var equals = lines[i].indexOf("=");
+          if (equals > 0) {
+            values[lines[i].slice(0, equals)] = lines[i].slice(equals + 1);
+          }
+        }
+        return values;
+      }
+
       function removeFile(path) {
         fileIO.source = path;
         if (fileIO.exists()) {
@@ -613,6 +633,19 @@ MuseScore {
         return output;
       }
 
+      function readProcessExitCode() {
+        try {
+          var value = proc.exitCode;
+          if (typeof value == "function") {
+            value = proc.exitCode();
+          }
+          value = Number(value);
+          return isFinite(value) ? value : null;
+        } catch (e) {
+          return null;
+        }
+      }
+
       function startProcessCandidate(candidate) {
         var output = "";
         var shell = shellCommand(commandToString(candidate) + " 2>&1");
@@ -646,6 +679,7 @@ MuseScore {
             output += "shellStartFailed=" + shellError + "\n";
             return {
               finished: false,
+              exitCode: null,
               output: output
             };
           }
@@ -658,10 +692,13 @@ MuseScore {
           output += "waitForFinishedError=" + waitError + "\n";
         }
         output += "finished=" + finished + "\n";
+        var exitCode = readProcessExitCode();
+        output += "resolvedExitCode=" + (exitCode === null ? "<unavailable>" : exitCode) + "\n";
         output += readProcessOutput();
 
         return {
           finished: finished,
+          exitCode: exitCode,
           output: output
         };
       }
@@ -799,6 +836,8 @@ MuseScore {
         var offsetPath = path + ".offsets.csv";
         var debugPath = path + ".debug.log";
         var midi2Path = getMidi2ExportPath(path);
+        var pitchBendPath = getPitchBendMidiExportPath(path);
+        var completionPath = path + ".writer.complete";
         var jobPath = pluginDirectoryPath() + "/midx_writer_job.txt";
         var shellHelperPath = pluginDirectoryPath() + "/midx_shell_writer.sh";
         var commands = pythonCommandCandidates("");
@@ -812,11 +851,18 @@ MuseScore {
         output += "offsetPath=" + offsetPath + "\n";
         output += "targetPath=" + path + "\n";
         output += "midi2Path=" + midi2Path + "\n";
+        output += "pitchBendPath=" + pitchBendPath + "\n";
+        output += "completionPath=" + completionPath + "\n";
+        output += "pitchBendRangeSemitones=" + pluginId.pitchBendRangeSemitones + "\n";
         output += "ticksPerQuarter=" + ticksPerQuarter + "\n";
         output += "offsetCount=" + countOffsetEvents(noteEvents) + "\n";
 
-        removeFile(path);
-        removeFile(midi2Path);
+        if (!removeFile(completionPath)) {
+          return {
+            success: false,
+            message: "Could not clear stale writer completion file: " + completionPath
+          };
+        }
         removeFile(debugPath);
 
         if (!writeNativeMidiFile(nativeMidiPath)) {
@@ -841,6 +887,9 @@ MuseScore {
             "offset_path=" + offsetPath + "\n" +
             "output_path=" + path + "\n" +
             "midi2_output_path=" + midi2Path + "\n" +
+            "pitch_bend_output_path=" + pitchBendPath + "\n" +
+            "pitch_bend_range_semitones=" + pluginId.pitchBendRangeSemitones + "\n" +
+            "completion_path=" + completionPath + "\n" +
             "ticks_per_quarter=" + ticksPerQuarter + "\n" +
             "debug_path=" + debugPath + "\n")) {
           return {
@@ -851,33 +900,47 @@ MuseScore {
         output += summarizeFile(jobPath, "jobFile");
 
         for (var i = 0; i < commands.length; i++) {
-          removeFile(path);
-          removeFile(midi2Path);
+          if (!removeFile(completionPath)) {
+            output += "\nCould not clear writer completion file before attempt.\n";
+            break;
+          }
           output += "\n--- attempt " + (i + 1) + " ---\n";
           var attempt = startProcessCandidate(commands[i]);
           output += attempt.output;
           output += summarizeFile(path, "targetFile");
           output += summarizeFile(midi2Path, "midi2File");
+          output += summarizeFile(pitchBendPath, "pitchBendFile");
+          output += summarizeFile(completionPath, "completionFile");
           writeTextFile(debugPath, output);
 
-          if (attempt.finished && fileExists(path) && fileExists(midi2Path)) {
+          var completion = fileExists(completionPath) ? readKeyValueFile(completionPath) : {};
+          if (attempt.finished && (attempt.exitCode === null || attempt.exitCode == 0) &&
+              completion.status == "ok" &&
+              fileExists(path) && fileExists(midi2Path) && fileExists(pitchBendPath)) {
             removeFile(nativeMidiPath);
             removeFile(offsetPath);
             removeFile(jobPath);
+            removeFile(completionPath);
             return {
               success: true,
               method: "MuseScore writeScore + " + commandToString(commands[i]),
               midi2Path: midi2Path,
+              pitchBendPath: pitchBendPath,
+              channelSteals: Number(completion.pitch_bend_channel_steals || 0),
+              clippedBends: Number(completion.pitch_bend_clipped_bends || 0),
+              percussionOffsetsIgnored: Number(completion.pitch_bend_percussion_offsets_ignored || 0),
               message: output
             };
           }
         }
 
         writeTextFile(debugPath, output);
+        removeFile(completionPath);
         return {
           success: false,
           message: "Native MIDI injection failed. Detailed log:\n" + debugPath +
-            "\nTemporary files were left for debugging:\n" + nativeMidiPath + "\n" + offsetPath + "\n" + jobPath
+            "\nPrevious completed exports were left unchanged. Temporary files were left for debugging:\n" +
+            nativeMidiPath + "\n" + offsetPath + "\n" + jobPath
         };
       }
 
@@ -918,6 +981,14 @@ MuseScore {
           return midxPath.slice(0, midxPath.length - 5) + ".midi2";
         }
         return midxPath + ".midi2";
+      }
+
+      function getPitchBendMidiExportPath(midxPath) {
+        midxPath = "" + midxPath;
+        if (strEndsWith(midxPath.toLowerCase(), ".midx")) {
+          return midxPath.slice(0, midxPath.length - 5) + ".pitch-bend.mid";
+        }
+        return midxPath + ".pitch-bend.mid";
       }
 
       function getNoteTick(note) {
@@ -1219,14 +1290,29 @@ MuseScore {
         var result = writeMidxFile(exportPath, ticksPerQuarter, tempoEvents, noteEvents);
 
         if (result.success) {
-          messageDialog.title = "MIDX Export Success";
-          messageDialog.text = "exported to " + exportPath +
+          var warning = "";
+          if (result.channelSteals > 0) {
+            warning += "\nWarning: " + result.channelSteals +
+              " active note(s) were ended early because MIDI 1.0 provides only 15 melodic pitch-bend channels.";
+          }
+          if (result.clippedBends > 0) {
+            warning += "\nWarning: " + result.clippedBends +
+              " pitch bend(s) exceeded the configured range and were clipped.";
+          }
+          if (result.percussionOffsetsIgnored > 0) {
+            warning += "\nWarning: " + result.percussionOffsetsIgnored +
+              " microtonal offset(s) on GM percussion notes were ignored.";
+          }
+          messageDialog.title = warning == "" ?
+            "Microtonal MIDI Export Success" : "Microtonal MIDI Export Completed With Warnings";
+          messageDialog.text = "MIDX: " + exportPath +
             "\nMIDI 2.0 clip: " + (result.midi2Path || getMidi2ExportPath(exportPath)) +
+            "\nPitch-bend MIDI: " + (result.pitchBendPath || getPitchBendMidiExportPath(exportPath)) +
             ".\nNote events: " + noteEvents.length +
             ", offsets: " + countOffsetEvents(noteEvents) +
-            ".\nWriter: " + result.method + ".";
+            ".\nWriter: " + result.method + "." + warning;
         } else {
-          messageDialog.title = "MIDX Export Failed";
+          messageDialog.title = "Microtonal MIDI Export Failed";
           messageDialog.text = "failed to export to " + exportPath + ".\n" + result.message;
         }
 
