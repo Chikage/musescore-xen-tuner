@@ -1,0 +1,22 @@
+// This config will be used if no tuning config is specified in staff/system text.
+// 
+// Modify this to change the default tuning config.
+
+A4: 440
+0c 200c 300c 500c 700c 800c 1000c 1200c
+bbb bb b (100c) # x #x
+aux(0)
+aux(1)
+sec()
+'bbb' bbb -300c
+'bb' bb -200c
+'b' b -100c
+'###' #x 300c
+'#x' #x 300c
+'x#' #x 300c
+'##' x 200c
+'x' x 200c
+'#' # 100c
+
+// explicit() // uncomment this line to put explicit accidentals on everything
+              // i.e. no carry over accidentals & atonal writing.

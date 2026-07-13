@@ -1,0 +1,4 @@
+
+A4: 440
+
+0 (1*1200*Math.log(3)/Math.LN2)c (2*1200*Math.log(3)/Math.LN2)c

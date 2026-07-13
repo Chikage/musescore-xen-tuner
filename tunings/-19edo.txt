@@ -1,0 +1,22 @@
+// This config will be used if no tuning config is specified in staff/system text.
+// 
+// Modify this to change the default tuning config.
+
+A3: 216
+0c -3\19 -6\19 -8\19 -11\19 -14\19 -17\19 -1200c
+bbb bb b (-1\19) # 148 #.148
+aux(0)
+aux(1)
+sec()
+'bbb' bbb +3/19*1200c
+'bb' bb +2/19*1200c
+'b' b +1/19*1200c
+'###' #.148 -3/19*1200c
+'#x' #.148 -3/19*1200c
+'x#' #.148 -3/19*1200c
+'##' 148 -2/19*1200c
+'x' 148 -2/19*1200c
+'#' # -1/19*1200c
+
+// explicit() // uncomment this line to put explicit accidentals on everything
+              // i.e. no carry over accidentals & atonal writing.

@@ -1,0 +1,94 @@
+<section class="toolbar" aria-label="waterfall controls">
+  <div class="transport-buttons" role="group" aria-label="file and playback controls">
+    <div class="file-zone icon-button" id="dropZone">
+      <input id="fileInput" type="file" accept=".midx,.midix,.midi2,audio/midi-clip" aria-label="Open MIDI file" title="Open MIDI file">
+      <label for="fileInput" aria-hidden="true">
+        <svg class="button-icon folder-icon" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+          <path d="M3.5 7.5h6l2 2h9v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"></path>
+          <path d="M3.5 7.5v-1.5a2 2 0 0 1 2-2h3.5l2 2h7.5a2 2 0 0 1 2 2v1.5"></path>
+        </svg>
+      </label>
+    </div>
+
+    <button class="icon-button" id="playButton" type="button" aria-label="Play" title="Play" data-state="play">
+      <svg class="button-icon play-state play-state-play" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+        <path d="M8 5v14l11-7z"></path>
+      </svg>
+      <svg class="button-icon play-state play-state-pause" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+        <path d="M8 5v14"></path>
+        <path d="M16 5v14"></path>
+      </svg>
+      <svg class="button-icon play-state play-state-loading" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+        <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
+      </svg>
+      <span class="sr-only">Play</span>
+    </button>
+
+    <button class="icon-button" id="resetButton" type="button" aria-label="Reset" title="Reset">
+      <svg class="button-icon reset-icon" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+        <path d="M7.2 8.2A7.2 7.2 0 1 1 6 14.3"></path>
+        <path d="M7.2 4.8v3.4h3.4"></path>
+      </svg>
+    </button>
+  </div>
+
+  <div class="sound-buttons" role="group" aria-label="sound source">
+    <button class="sound-button" id="systemSoundButton" type="button" data-mode="system">Sys</button>
+    <button class="sound-button active" id="jsSoundButton" type="button" data-mode="piano">JS</button>
+    <button id="sf2FileButton" type="button" title="Load a SoundFont .sf2 file">SF2</button>
+    <input id="sf2FileInput" type="file" accept=".sf2,audio/soundfont">
+  </div>
+
+  <div class="metric-strip" aria-label="score metrics">
+    <div class="metric">
+      <span>BPM</span>
+      <output id="bpmValue">120.0</output>
+    </div>
+
+    <div class="metric">
+      <span>Meter</span>
+      <output id="meterValue">4/4</output>
+    </div>
+
+    <div class="metric editable-metric">
+      <label for="divisionInput">EDO</label>
+      <input id="divisionInput" type="number" min="0" max="53" step="1" value="12" aria-label="EDO divisions">
+      <output id="divisionValue">12</output>
+    </div>
+
+    <div class="metric editable-metric">
+      <label for="speedInput">Speed</label>
+      <input id="speedInput" type="number" min="0.2" max="4" step="0.05" value="1.00" aria-label="Playback speed">
+      <output id="speedValue">1.00x</output>
+    </div>
+  </div>
+
+  <div class="slider-stack" aria-label="linear controls">
+    <div class="control move-control">
+      <label for="moveInput">Move</label>
+      <input id="moveInput" type="range" min="0" max="0" step="0.25" value="0">
+      <output id="moveValue">0 st</output>
+    </div>
+
+    <div class="control">
+      <label for="offsetInput">Offset</label>
+      <input id="offsetInput" type="range" min="-64" max="64" step="1" value="0">
+      <output id="offsetValue">0 c</output>
+    </div>
+  </div>
+
+  <div class="control zoom-control" role="group" aria-labelledby="zoomLabel">
+    <span id="zoomLabel" class="control-label">Zoom</span>
+    <div class="zoom-joystick" id="zoomJoystick" tabindex="0" role="application" aria-label="Zoom: 160 px/s / 1.00x">
+      <span class="joystick-axis joystick-axis-x" aria-hidden="true"></span>
+      <span class="joystick-axis joystick-axis-y" aria-hidden="true"></span>
+      <span class="zoom-joystick-thumb" id="zoomJoystickThumb" aria-hidden="true"></span>
+    </div>
+    <output id="zoomValue">
+      <span id="zoomTimeValue">160 px/s</span>
+      <span id="zoomPitchValue">1.00x</span>
+    </output>
+  </div>
+
+  <div class="stats" id="statsText">No file loaded</div>
+</section>

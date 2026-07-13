@@ -1,0 +1,7 @@
+{
+  "_help": "Edit these true/false values. If autoDetectPlayback is true, preferPlaybackTimbre is ignored. If autoDetectPlayback is false, preferPlaybackTimbre chooses playback timbre mode.",
+  "playback": {
+    "autoDetectPlayback": false,
+    "preferPlaybackTimbre": false
+  }
+}

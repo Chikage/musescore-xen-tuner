@@ -1,0 +1,72 @@
+// Copyright (C) 2023 euwbah
+// 
+// This file is part of Xen Tuner.
+// 
+// Xen Tuner is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+// 
+// Xen Tuner is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+// 
+// You should have received a copy of the GNU General Public License
+// along with Xen Tuner.  If not, see <http://www.gnu.org/licenses/>.
+
+// When there's some syntax error the imported files and its not showing up,
+// uncomment these lines
+// import "runtime/tables/generated-tables.js" as AAAAAaa
+// import "runtime/tables/lookup-tables.js" as Aaa
+// import "runtime/fns.js" as Bbb
+
+import "runtime/fns.ms.js" as Fns
+import MuseScore 3.0
+import QtQuick 2.9
+import QtQuick.Controls 2.2
+import QtQuick.Window 2.2
+import QtQuick.Layouts 1.2
+import Qt.labs.settings 1.0
+import FileIO 3.0
+
+MuseScore {
+      version: "0.3.5"
+      description: "Create fingerings to display edo/neji-steps of notes relative to the reference note.\n\n" +
+        "Applies to selection, or entire score if nothing is selected."
+      menuPath: "Plugins.Xen Tuner.Display Steps"
+      readonly property var pluginHomePath: Qt.resolvedUrl("../").replace("file:///", "")
+      
+      id: pluginId
+
+      Component.onCompleted : {
+        if (mscoreMajorVersion >= 4) {
+          pluginId.title = qsTr("Xen Tuner - Display Steps");
+          // pluginId.thumbnailName = "some_thumbnail.png";
+          pluginId.categoryCode = "composing-arranging-tools";
+        }
+      }
+
+      FileIO {
+        id: fileIO
+        source: "./"
+        onError: function(err) {
+          if (err.indexOf(".json") != -1) {
+            console.warn("File not found: " + fileIO.source)
+          } else {
+            console.error(fileIO.source + ". File IO Error: " + err);
+          }
+        }
+      }
+
+      onRun: {
+        var isMS4 = mscoreMajorVersion >= 4;
+        Fns.init(Accidental, NoteType, SymId, Element,
+          fileIO, curScore, isMS4, pluginHomePath);
+        Fns.preAction();
+        Fns.log('Xen Tuner - Display Steps');
+
+        Fns.operationTune(2);
+        Fns.postAction();
+      }
+}

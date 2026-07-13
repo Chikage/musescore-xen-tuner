@@ -1,0 +1,15 @@
+// This config will be used if no tuning config is specified in staff/system text.
+// 
+// Modify this to change the default tuning config.
+
+C4: 261.6255653005986
+0c 5\31 10\31 13\31 18\31 23\31 28\31 1200c
+b (2\31) #
+aux(0)
+aux(1)
+sec()
+'b' b -2/31*1200c
+'#' # 2/31*1200c
+
+// explicit() // uncomment this line to put explicit accidentals on everything
+              // i.e. no carry over accidentals & atonal writing.
