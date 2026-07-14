@@ -513,12 +513,14 @@ MuseScore {
 
                     onPaint: {
                         var context = getContext("2d");
+                        var strokeWidth = Math.max(1.5, pluginId.controlRowHeight * 0.06);
+                        var inset = strokeWidth / 2;
                         context.clearRect(0, 0, width, height);
                         context.beginPath();
-                        context.moveTo(1, 1);
-                        context.lineTo(width / 2, height - 1);
-                        context.lineTo(width - 1, 1);
-                        context.lineWidth = Math.max(1.5, pluginId.controlRowHeight * 0.06);
+                        context.moveTo(inset, inset);
+                        context.lineTo(width / 2, height - inset);
+                        context.lineTo(width - inset, inset);
+                        context.lineWidth = strokeWidth;
                         context.strokeStyle = "#404040";
                         context.lineCap = "round";
                         context.lineJoin = "round";
@@ -559,12 +561,14 @@ MuseScore {
 
                     onPaint: {
                         var context = getContext("2d");
+                        var strokeWidth = Math.max(1.5, pluginId.controlRowHeight * 0.06);
+                        var inset = strokeWidth / 2;
                         context.clearRect(0, 0, width, height);
                         context.beginPath();
-                        context.moveTo(1, 1);
-                        context.lineTo(width / 2, height - 1);
-                        context.lineTo(width - 1, 1);
-                        context.lineWidth = Math.max(1.5, pluginId.controlRowHeight * 0.06);
+                        context.moveTo(inset, inset);
+                        context.lineTo(width / 2, height - inset);
+                        context.lineTo(width - inset, inset);
+                        context.lineWidth = strokeWidth;
                         context.strokeStyle = "#404040";
                         context.lineCap = "round";
                         context.lineJoin = "round";
@@ -1009,8 +1013,18 @@ MuseScore {
             if (!nextGroups || nextGroups.length === undefined)
                 nextGroups = [];
             auxButtonGroups = nextGroups;
-            auxChainCount = Math.max(0, nextGroups.length - 1);
-            clampFilteredAuxChainInput();
+            var currentChainInputText = filteredAuxChainInput.editText;
+            var nextAuxChainCount = Math.max(0, nextGroups.length - 1);
+            var auxChainCountChanged = auxChainCount != nextAuxChainCount;
+            auxChainCount = nextAuxChainCount;
+            if (auxChainCountChanged) {
+                if (filteredAuxChainInput.activeFocus) {
+                    filteredAuxChainInput.currentIndex = -1;
+                    filteredAuxChainInput.editText = currentChainInputText;
+                } else {
+                    clampFilteredAuxChainInput(currentChainInputText);
+                }
+            }
         } catch (e) {
             console.error("Failed to refresh aux buttons: " + e);
         }
