@@ -47,7 +47,8 @@ function readNoteData(msNote, tuningConfig, keySig, tickOfThisBar, tickOfNextBar
     var nominal = mod(nominalsFromTuningNote, tuningConfig.numNominals);
 
     var currAccStateHash = getAccidental(
-        cursor, msNote.internalNote, tickOfThisBar, tickOfNextBar, 0, null, reusedBarState);
+        cursor, msNote.internalNote, tickOfThisBar, tickOfNextBar, 0, null,
+        reusedBarState, tuningConfig);
 
     var accSyms = accidentalSymbolsFromHash(currAccStateHash);
     accSyms = removeUnusedSymbols(accSyms, tuningConfig);

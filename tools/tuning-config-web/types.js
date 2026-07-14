@@ -74,9 +74,21 @@ class MSNote {
      */
     nominalsFromA4;
     /**
+     * Compatibility view of the effective explicit accidental before applying
+     * a tuning config. Plugin-attached symbols take precedence here.
      * @type {AccidentalSymbols?}
      */
     accidentals;
+    /**
+     * Accidental symbols attached as Xen Tuner Symbol/Fingering elements.
+     * @type {AccidentalSymbols?}
+     */
+    attachedAccidentals;
+    /**
+     * MuseScore-native accidental attached to the note.
+     * @type {AccidentalSymbols?}
+     */
+    nativeAccidentals;
     /**
      * @type {number}
      */
@@ -639,6 +651,19 @@ class TuningConfig {
      * @type {Object.<SymbolCode, boolean>}
      */
     usedSecondarySymbols;
+
+    /**
+     * Lazily generated mapping from MuseScore-native standard accidental
+     * SymbolCodes to this tuning's primary-chain symbol spellings.
+     * @type {Object.<SymbolCode, (SymbolCode[]|null)>?}
+     */
+    nativeAccidentalMap;
+
+    /**
+     * Native SymbolCodes already reported as unmappable for this tuning.
+     * @type {Object.<SymbolCode, boolean>}
+     */
+    unmappedNativeAccidentals;
 
     /**
      * These are all the secondary accidentals in the order which they are declared.

@@ -181,6 +181,7 @@ function operationTune(display) {
     for (var staff = startStaff; staff <= endStaff; staff++) {
 
         _curScore.startCmd();
+        var accidentalNotationChanged = false;
 
         for (var voice = 0; voice < 4; voice++) {
             // After each voice & rewind, 
@@ -236,6 +237,12 @@ function operationTune(display) {
                             // iterate through all grace chords
                             var notes = graceChords[i].notes;
                             for (var j = 0; j < notes.length; j++) {
+                                if (readFingeringAccidentalInput(
+                                    tokenizeNote(notes[j]),
+                                    parms.currTuning
+                                ) != null) {
+                                    accidentalNotationChanged = true;
+                                }
                                 tuneNote(notes[j], parms.currKeySig, parms.currTuning,
                                     tickOfThisBar, tickOfNextBar, cursor, reusedBarState, newElement);
                                 if (display) {
@@ -247,6 +254,12 @@ function operationTune(display) {
                         }
                         var notes = cursor.element.notes;
                         for (var i = 0; i < notes.length; i++) {
+                            if (readFingeringAccidentalInput(
+                                tokenizeNote(notes[i]),
+                                parms.currTuning
+                            ) != null) {
+                                accidentalNotationChanged = true;
+                            }
                             tuneNote(notes[i], parms.currKeySig, parms.currTuning,
                                 tickOfThisBar, tickOfNextBar, cursor, reusedBarState, newElement);
                             if (display) {
@@ -267,9 +280,11 @@ function operationTune(display) {
 
         _curScore.startCmd();
         
-        removeUnnecessaryAccidentals(
-            startTick, endTick, parms, cursor, newElement, startBarIdx, endBarIdx
-        );
+        if (accidentalNotationChanged) {
+            removeUnnecessaryAccidentals(
+                startTick, endTick, parms, cursor, newElement, startBarIdx, endBarIdx
+            );
+        }
 
         autoPositionAccidentals(
             startTick, endTick, parms, cursor, startBarIdx, endBarIdx
@@ -1213,7 +1228,19 @@ function loadedKeySignatureConfigEvent(keySignatureData, tick) {
         priority: 40,
         order: 1000000,
         config: function (parms) {
-            parms.currKeySig = keySignatureData.keySig;
+            if (keySignatureData.entries) {
+                setCurrentKeySignatureSource(
+                    parms,
+                    'native-entries',
+                    keySignatureData.entries
+                );
+            } else {
+                setCurrentKeySignatureSource(
+                    parms,
+                    'static',
+                    keySignatureData.keySig
+                );
+            }
         }
     };
 }
@@ -1683,29 +1710,9 @@ function loadedKeySignatureVisualSymbolCountAtCursor(cursor, staff) {
 }
 
 function loadedKeySignatureKeySigFromVisualEntries(entries, tuningConfig) {
-    if (!entries || entries.length == 0 || !tuningConfig ||
-        tuningConfig.numNominals != 7)
+    if (!entries || entries.length == 0)
         return null;
-
-    var keySig = [];
-    for (var i = 0; i < tuningConfig.numNominals; i++) {
-        keySig.push(null);
-    }
-
-    for (var entryIdx = 0; entryIdx < entries.length; entryIdx++) {
-        var entry = entries[entryIdx];
-        if (!entry.symbols || entry.symbols.length == 0)
-            continue;
-
-        var accidentalHash = keySignatureAccidentalHashFromSymbols(entry.symbols);
-        var tuningNominal = mod(
-            entry.nativeNominal - tuningConfig.tuningNominal,
-            tuningConfig.numNominals
-        );
-        keySig[tuningNominal] = accidentalHash;
-    }
-
-    return keySig;
+    return nativeNominalKeySignatureEntriesToKeySig(entries, tuningConfig);
 }
 
 function loadedKeySignatureEntriesStateKey(kind, cursor, entries) {
@@ -1753,12 +1760,7 @@ function appendLoadedKeySignatureVisualConfigEvent(configs, cursor, staff, state
         tick: configTick,
         priority: 40,
         config: function (parms) {
-            var visualKeySig = loadedKeySignatureKeySigFromVisualEntries(
-                entries,
-                parms.currTuning
-            );
-            if (visualKeySig != null)
-                parms.currKeySig = visualKeySig;
+            setCurrentKeySignatureSource(parms, 'native-entries', entries);
         }
     });
 }

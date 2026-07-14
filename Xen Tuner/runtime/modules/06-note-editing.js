@@ -31,13 +31,17 @@ function setAccidental(note, orderedSymbols, newElement, tuningConfig) {
 
     var elements = note.elements;
     var elemsToRemove = [];
+    var nativeAccidentalCode = nativeAccidentalSymbolCode(note);
 
     // First, remove any accidental symbols from note.
 
     for (var i = 0; i < elements.length; i++) {
         if (elements[i].symbol) {
             var symCode = nativeAccidentalLabelToSymbolCode(elements[i].symbol);
-            if (tuningConfig.usedSymbols[symCode] || tuningConfig.usedSecondarySymbols[symCode]) {
+            var isPluginOwnedSymbol = elements[i].z >= 1000 &&
+                elements[i].z < 2000;
+            if (isPluginOwnedSymbol || !tuningConfig ||
+                tuningConfigUsesAccidentalSymbol(tuningConfig, symCode)) {
                 // This element is an accidental symbol, remove it.
                 elemsToRemove.push(elements[i]);
             }
@@ -53,8 +57,26 @@ function setAccidental(note, orderedSymbols, newElement, tuningConfig) {
         note.remove(elem);
     });
 
+    if (!orderedSymbols || orderedSymbols.length == 0) {
+        if (elemsToRemove.length > 0 || !tuningConfig ||
+            tuningConfigUsesAccidentalSymbol(tuningConfig, nativeAccidentalCode)) {
+            clearMuseScoreNativeAccidental(note);
+        }
+        return;
+    }
 
-    if (!orderedSymbols || orderedSymbols.length == 0) return;
+    // Prefer MuseScore's native accidental element whenever the requested
+    // spelling is exactly one supported SMuFL accidental. This gives native
+    // layout, accidental carry, selection, import/export and enharmonic
+    // behavior while retaining plugin Symbols for compound/ASCII spellings.
+    if (orderedSymbols.length == 1 &&
+        setMuseScoreNativeAccidentalSymbol(note, orderedSymbols[0])) {
+        return;
+    }
+
+    // A compound/plugin accidental replaces the native accidental rather than
+    // stacking on top of it. Its symbols below become the sole explicit state.
+    clearMuseScoreNativeAccidental(note);
 
     // Create new SymId symbols and attach to note.
     var zIdx = 1000;
@@ -481,32 +503,24 @@ function removeUnnecessaryAccidentals(startBarTick, endBarTick, parms, cursor, n
         var accidentalState = {};
 
         var lines = Object.keys(barState);
-
-        // Don't modify parms. Create a fake parms to store current
-        // configs applied at this bar.
-        /** @type {Parms} */
-        var fakeParms = {};
-        resetParms(fakeParms);
-
-        for (var i = 0; i < parms.staffConfigs[staff].length; i++) {
-            var config = parms.staffConfigs[staff][i];
-            if (config.tick <= tickOfThisBar) {
-                config.config(fakeParms);
-            }
-        }
-
-        var tuningConfig = fakeParms.currTuning;
-        var keySig = fakeParms.currKeySig;
-
-        if (tuningConfig.alwaysExplicitAccidental) {
-            // don't remove unnecessary accidentals if tuning config requests
-            // all accidentals to be made explicit.
-            continue;
-        }
+        var staffConfigs = parms.staffConfigs[staff];
 
         for (var lineIdx = 0; lineIdx < lines.length; lineIdx++) {
             var lineNum = lines[lineIdx]; // staff line number
             var lineTickVoices = barState[lineNum]; // tick to voices mappings.
+
+            // Each line is traversed independently from left to right, so give
+            // it an independent config cursor. This supports tuning/key-signature
+            // changes that occur in the middle of a measure.
+            /** @type {Parms} */
+            var lineParms = {};
+            resetParms(lineParms);
+            var nextLineConfigIdx = applyConfigsUpTo(
+                staffConfigs,
+                lineParms,
+                tickOfThisBar,
+                0
+            );
 
             // Sort ticks in increasing order.
             var ticks = Object.keys(barState[lineNum]).sort(
@@ -518,6 +532,36 @@ function removeUnnecessaryAccidentals(startBarTick, endBarTick, parms, cursor, n
             // traversing ticks left to right.
             for (var tickIdx = 0; tickIdx < ticks.length; tickIdx++) {
                 var currTick = ticks[tickIdx];
+                var previousLineConfigIdx = nextLineConfigIdx;
+                nextLineConfigIdx = applyConfigsUpTo(
+                    staffConfigs,
+                    lineParms,
+                    parseInt(currTick),
+                    nextLineConfigIdx
+                );
+
+                // MuseScore resets accidental carry at a key-signature change.
+                // Tuning/reference changes can also reinterpret the same glyph,
+                // so do not compare post-change notes with pre-change state.
+                for (var appliedConfigIdx = previousLineConfigIdx;
+                    appliedConfigIdx < nextLineConfigIdx;
+                    appliedConfigIdx++) {
+                    var appliedKind = staffConfigs[appliedConfigIdx].kind || '';
+                    if (appliedKind == 'tuning' || appliedKind == 'reference' ||
+                        appliedKind.indexOf('keysig') != -1) {
+                        delete accidentalState[lineNum];
+                        break;
+                    }
+                }
+
+                var tuningConfig = lineParms.currTuning;
+                var keySig = lineParms.currKeySig;
+
+                if (tuningConfig.alwaysExplicitAccidental) {
+                    // Do not remove accidentals while the active config requests
+                    // every accidental to remain explicit.
+                    continue;
+                }
 
                 // go from voice 1 to 4.
                 for (var voice = 0; voice < 4; voice++) {
@@ -558,8 +602,8 @@ function removeUnnecessaryAccidentals(startBarTick, endBarTick, parms, cursor, n
                         var prevExplicitAcc = null;
                         var proceed = true;
                         for (var noteIdx = 0; noteIdx < msNotes.length; noteIdx++) {
-                            var accHash = accidentalsHash(msNotes[noteIdx].accidentals);
-                            accHash = removeUnusedSymbols(accHash, tuningConfig) || '';
+                            var accHash = effectiveAccidentalHash(
+                                msNotes[noteIdx], tuningConfig) || '';
 
                             if (accHash != '') {
                                 if (prevExplicitAcc == null) {
@@ -579,8 +623,8 @@ function removeUnnecessaryAccidentals(startBarTick, endBarTick, parms, cursor, n
                         for (var noteIdx = 0; noteIdx < msNotes.length; noteIdx++) {
                             var msNote = msNotes[noteIdx];
 
-                            var accHash = accidentalsHash(msNote.accidentals);
-                            accHash = removeUnusedSymbols(accHash, tuningConfig) || '';
+                            var accHash = effectiveAccidentalHash(
+                                msNote, tuningConfig) || '';
                             var accHashWords = accHash.split(' ');
                             var isNatural = accHashWords.length == 2 && accHashWords[0] == '2';
 

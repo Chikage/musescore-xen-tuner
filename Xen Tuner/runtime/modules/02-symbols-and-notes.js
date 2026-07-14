@@ -102,6 +102,27 @@ function musescoreNativeSymbolNameFromValue(value) {
     if (value === undefined || value === null)
         return null;
 
+    if (typeof value == 'object') {
+        var symbolFields = [
+            'accidentalSymbolName',
+            'symbolName',
+            'symbol',
+            'sym',
+            'symId'
+        ];
+        for (var fieldIdx = 0; fieldIdx < symbolFields.length; fieldIdx++) {
+            var field = symbolFields[fieldIdx];
+            try {
+                if (value[field] !== undefined && value[field] !== null &&
+                    value[field] !== value) {
+                    var nestedName = musescoreNativeSymbolNameFromValue(value[field]);
+                    if (nestedName !== null)
+                        return nestedName;
+                }
+            } catch (e) { }
+        }
+    }
+
     var labelText = value.toString();
     var numericValue = parseInt(labelText, 10);
     if (!isNaN(numericValue) && String(numericValue) == labelText &&
@@ -166,10 +187,24 @@ function nativeAccidentalLabelToSymbolCode(label) {
 }
 
 function nativeAccidentalTypeLabel(accidentalType) {
-    if (accidentalType === undefined || accidentalType === null || Accidental === null) {
+    if (accidentalType === undefined || accidentalType === null ||
+        typeof Accidental == 'undefined' || Accidental === null) {
         return null;
     }
 
+    // Prefer the enum object itself. MuseScore exposes AccidentalType values to
+    // QML as numbers, which must not be confused with SymId numbers.
+    for (var enumLabel in Accidental) {
+        try {
+            if (Accidental[enumLabel] !== undefined &&
+                Accidental[enumLabel] == accidentalType) {
+                return enumLabel;
+            }
+        } catch (e) { }
+    }
+
+    // Some QML enum wrappers do not enumerate their members. Fall back to the
+    // labels known by Xen Tuner and probe the wrapper explicitly.
     for (var label in Lookup.LABELS_TO_CODE) {
         if (label != label.toUpperCase()) {
             continue;
@@ -186,6 +221,20 @@ function nativeAccidentalTypeLabel(accidentalType) {
     return null;
 }
 
+function nativeAccidentalTypeSymbolCode(accidentalType) {
+    var label = nativeAccidentalTypeLabel(accidentalType);
+    var enumCode = nativeAccidentalLabelToSymbolCode(label);
+    if (enumCode !== null)
+        return enumCode;
+
+    if (typeof accidentalType == 'string' &&
+        !accidentalType.trim().match(/^-?\d+$/)) {
+        return nativeAccidentalLabelToSymbolCode(accidentalType);
+    }
+
+    return null;
+}
+
 /**
  * Convert a MuseScore-native accidental attached to a note into a Xen Tuner
  * SymbolCode. Returns null when the note has no explicit native accidental.
@@ -196,27 +245,423 @@ function nativeAccidentalTypeLabel(accidentalType) {
 function nativeAccidentalSymbolCode(note) {
     var symCode = null;
 
+    var directSymbolFields = [
+        'accidentalSymbolName',
+        'accidentalSymbolId',
+        'accidentalSymbol'
+    ];
+    for (var directIdx = 0; directIdx < directSymbolFields.length; directIdx++) {
+        try {
+            var directValue = note[directSymbolFields[directIdx]];
+            if (directValue !== undefined && directValue !== null && directValue !== '') {
+                symCode = nativeAccidentalLabelToSymbolCode(directValue);
+                if (symCode != null)
+                    return symCode;
+            }
+        } catch (e) { }
+    }
+
     if (note.accidental) {
-        symCode = nativeAccidentalLabelToSymbolCode(note.accidental);
-        if (symCode != null) {
-            return symCode;
+        var accidentalSymbolFields = [
+            'accidentalSymbolName',
+            'symbolName',
+            'symbol',
+            'sym',
+            'symId'
+        ];
+        for (var fieldIdx = 0; fieldIdx < accidentalSymbolFields.length; fieldIdx++) {
+            try {
+                var accidentalValue = note.accidental[accidentalSymbolFields[fieldIdx]];
+                if (accidentalValue !== undefined && accidentalValue !== null) {
+                    symCode = nativeAccidentalLabelToSymbolCode(accidentalValue);
+                    if (symCode != null)
+                        return symCode;
+                }
+            } catch (e2) { }
         }
+
+        try {
+            if (note.accidental.accidentalType !== undefined &&
+                note.accidental.accidentalType !== null) {
+                symCode = nativeAccidentalTypeSymbolCode(
+                    note.accidental.accidentalType);
+                if (symCode != null)
+                    return symCode;
+            }
+        } catch (e3) { }
+
     }
 
     if (note.accidentalType !== undefined && note.accidentalType !== null) {
-        symCode = nativeAccidentalLabelToSymbolCode(note.accidentalType);
-        if (symCode != null) {
-            return symCode;
-        }
-
-        var label = nativeAccidentalTypeLabel(note.accidentalType);
-        symCode = nativeAccidentalLabelToSymbolCode(label);
+        // accidentalType is an enum value, not a SymId. Resolve its enum label
+        // before consulting the Xen Tuner symbol table.
+        symCode = nativeAccidentalTypeSymbolCode(note.accidentalType);
         if (symCode != null) {
             return symCode;
         }
     }
 
+    if (note.accidental) {
+        // Compatibility with older/custom wrappers whose toString() returns
+        // an AccidentalType label or SMuFL name. This deliberately runs after
+        // note.accidentalType so an ambiguous numeric string is never treated
+        // as a SymId when enum context is available.
+        symCode = nativeAccidentalTypeSymbolCode(note.accidental.toString());
+        if (symCode == null)
+            symCode = nativeAccidentalLabelToSymbolCode(note.accidental);
+        if (symCode != null)
+            return symCode;
+    }
+
     return null;
+}
+
+function nativeAccidentalTypeForSymbolCode(symCode) {
+    if (typeof symCode == 'string' && symCode.charAt(0) == "'")
+        return null;
+    if (typeof Accidental == 'undefined' || Accidental === null)
+        return null;
+
+    var labels = Lookup.CODE_TO_LABELS[symCode];
+    if (!labels)
+        return null;
+
+    for (var i = 0; i < labels.length; i++) {
+        try {
+            if (Accidental[labels[i]] !== undefined)
+                return Accidental[labels[i]];
+        } catch (e) { }
+    }
+
+    return null;
+}
+
+function setMuseScoreNativeAccidentalSymbol(note, symCode) {
+    if (!note || (typeof symCode == 'string' && symCode.charAt(0) == "'"))
+        return false;
+
+    var labels = Lookup.CODE_TO_LABELS[symCode];
+    if (labels && typeof note.setAccidentalSymbol == 'function') {
+        for (var i = 0; i < labels.length; i++) {
+            try {
+                if (note.setAccidentalSymbol(labels[i]))
+                    return true;
+            } catch (e) { }
+        }
+    }
+
+    var accidentalType = nativeAccidentalTypeForSymbolCode(symCode);
+    if (accidentalType === null)
+        return false;
+
+    try {
+        note.accidentalType = accidentalType;
+        return true;
+    } catch (e2) {
+        return false;
+    }
+}
+
+function clearMuseScoreNativeAccidental(note) {
+    if (!note)
+        return false;
+
+    var noneType = 0;
+    try {
+        if (typeof Accidental != 'undefined' && Accidental !== null &&
+            Accidental.NONE !== undefined) {
+            noneType = Accidental.NONE;
+        }
+        note.accidentalType = noneType;
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function tuningConfigUsesAccidentalSymbol(tuningConfig, symCode) {
+    if (!tuningConfig || symCode === null || symCode === undefined)
+        return false;
+
+    return !!(tuningConfig.usedSymbols[symCode] ||
+        tuningConfig.usedSecondarySymbols[symCode]);
+}
+
+var MUSESCORE_STANDARD_ACCIDENTAL_DEGREES = {
+    '2': 0,
+    '3': 3,
+    '4': 2,
+    '5': 1,
+    '6': -1,
+    '7': -2,
+    '8': -3
+};
+
+function symbolCodeValue(symCode) {
+    var numericCode = parseInt(symCode, 10);
+    return String(numericCode) == String(symCode) ? numericCode : symCode;
+}
+
+function nativeAccidentalMappingChain(tuningConfig) {
+    if (!tuningConfig || !tuningConfig.accChains ||
+        tuningConfig.accChains.length == 0) {
+        return null;
+    }
+
+    var standardCodes = ['3', '4', '5', '6', '7', '8'];
+    for (var chainIdx = 0; chainIdx < tuningConfig.accChains.length; chainIdx++) {
+        var symbolsUsed = tuningConfig.accChains[chainIdx].symbolsUsed || [];
+        for (var codeIdx = 0; codeIdx < standardCodes.length; codeIdx++) {
+            if (symbolsUsed.indexOf(standardCodes[codeIdx]) != -1 ||
+                symbolsUsed.indexOf(parseInt(standardCodes[codeIdx], 10)) != -1) {
+                return tuningConfig.accChains[chainIdx];
+            }
+        }
+    }
+
+    if (tuningConfig.accChains.length == 1)
+        return tuningConfig.accChains[0];
+
+    // With multiple custom-glyph chains, choose the chain whose adjacent
+    // degree is closest to MuseScore's standard semitone. This avoids mapping
+    // native sharps onto a comma/arrow chain merely because it was declared
+    // first. An exact tie is ambiguous and must not be guessed silently.
+    var bestChain = null;
+    var bestDeviation = Infinity;
+    var ambiguous = false;
+    var TIE_EPSILON = 0.000001;
+
+    for (var candidateIdx = 0;
+        candidateIdx < tuningConfig.accChains.length;
+        candidateIdx++) {
+        var candidate = tuningConfig.accChains[candidateIdx];
+        var deviations = [];
+        var lowerIdx = candidate.centralIdx - 1;
+        var upperIdx = candidate.centralIdx + 1;
+
+        if (lowerIdx >= 0 && candidate.degreesSymbols[lowerIdx] != null)
+            deviations.push(Math.abs(Math.abs(candidate.tunings[lowerIdx]) - 100));
+        if (upperIdx < candidate.degreesSymbols.length &&
+            candidate.degreesSymbols[upperIdx] != null) {
+            deviations.push(Math.abs(Math.abs(candidate.tunings[upperIdx]) - 100));
+        }
+        if (deviations.length == 0)
+            continue;
+
+        var deviation = 0;
+        for (var deviationIdx = 0;
+            deviationIdx < deviations.length;
+            deviationIdx++) {
+            deviation += deviations[deviationIdx];
+        }
+        deviation /= deviations.length;
+
+        if (deviation < bestDeviation - TIE_EPSILON) {
+            bestDeviation = deviation;
+            bestChain = candidate;
+            ambiguous = false;
+        } else if (Math.abs(deviation - bestDeviation) <= TIE_EPSILON) {
+            ambiguous = true;
+        }
+    }
+
+    return ambiguous ? null : bestChain;
+}
+
+function buildNativeAccidentalMap(tuningConfig) {
+    var mapping = {};
+    var mappingChain = nativeAccidentalMappingChain(tuningConfig);
+
+    for (var nativeCode in MUSESCORE_STANDARD_ACCIDENTAL_DEGREES) {
+        if (String(nativeCode) == '2') {
+            mapping[nativeCode] = [2];
+            continue;
+        }
+
+        if (tuningConfig.usedSymbols[nativeCode]) {
+            mapping[nativeCode] = [symbolCodeValue(nativeCode)];
+            continue;
+        }
+
+        var degree = MUSESCORE_STANDARD_ACCIDENTAL_DEGREES[nativeCode];
+        var degreeSymbols = null;
+        if (mappingChain) {
+            var degreeIdx = mappingChain.centralIdx + degree;
+            if (degreeIdx >= 0 && degreeIdx < mappingChain.degreesSymbols.length)
+                degreeSymbols = mappingChain.degreesSymbols[degreeIdx];
+        }
+
+        mapping[nativeCode] = degreeSymbols == null ? null : degreeSymbols.slice();
+    }
+
+    tuningConfig.nativeAccidentalMap = mapping;
+    return mapping;
+}
+
+function nativeAccidentalSymbolsForTuning(symCode, tuningConfig) {
+    if (!tuningConfig)
+        return [symbolCodeValue(symCode)];
+
+    var codeKey = String(symCode);
+    if (MUSESCORE_STANDARD_ACCIDENTAL_DEGREES[codeKey] === undefined) {
+        return tuningConfigUsesAccidentalSymbol(tuningConfig, symCode) ?
+            [symbolCodeValue(symCode)] : null;
+    }
+
+    if (tuningConfig.usedSymbols[codeKey])
+        return [symbolCodeValue(symCode)];
+
+    var mapping = tuningConfig.nativeAccidentalMap ||
+        buildNativeAccidentalMap(tuningConfig);
+    var symbols = mapping[codeKey];
+    return symbols == null ? null : symbols.slice();
+}
+
+function warnUnmappedNativeAccidental(symCode, tuningConfig) {
+    if (!tuningConfig)
+        return;
+
+    if (!tuningConfig.unmappedNativeAccidentals)
+        tuningConfig.unmappedNativeAccidentals = {};
+    if (tuningConfig.unmappedNativeAccidentals[symCode])
+        return;
+
+    tuningConfig.unmappedNativeAccidentals[symCode] = true;
+    console.warn('Xen Tuner: MuseScore native accidental SymbolCode ' +
+        symCode + ' is not defined and cannot be mapped to the active tuning' +
+        (tuningConfig.sourceName ? ' (' + tuningConfig.sourceName + ')' : '') + '.');
+}
+
+function mapNativeAccidentalSymbols(nativeAccidentals, tuningConfig) {
+    if (!nativeAccidentals)
+        return null;
+
+    var mappedSymbols = [];
+    for (var symCode in nativeAccidentals) {
+        var symbols = nativeAccidentalSymbolsForTuning(symCode, tuningConfig);
+        if (symbols == null) {
+            warnUnmappedNativeAccidental(symCode, tuningConfig);
+            continue;
+        }
+
+        var count = parseInt(nativeAccidentals[symCode], 10);
+        for (var occurrence = 0; occurrence < count; occurrence++)
+            mappedSymbols = mappedSymbols.concat(symbols);
+    }
+
+    return mappedSymbols.length == 0 ? null :
+        accidentalSymbolsFromList(mappedSymbols);
+}
+
+function accidentalSymbolChainIndices(accSymbols, tuningConfig) {
+    var indices = [];
+    if (!accSymbols || !tuningConfig || !tuningConfig.accChains)
+        return indices;
+
+    function addIndex(chainIdx) {
+        if (indices.indexOf(chainIdx) == -1)
+            indices.push(chainIdx);
+    }
+
+    for (var chainIdx = 0; chainIdx < tuningConfig.accChains.length; chainIdx++) {
+        var symbolsUsed = tuningConfig.accChains[chainIdx].symbolsUsed || [];
+        for (var symCode in accSymbols) {
+            if (symbolsUsed.indexOf(String(symCode)) != -1 ||
+                symbolsUsed.indexOf(parseInt(symCode, 10)) != -1) {
+                addIndex(chainIdx);
+                break;
+            }
+        }
+    }
+
+    // A ligature glyph represents the accidental chains listed by `regarding`,
+    // even though the replacement glyph does not occur in symbolsUsed.
+    for (var ligIdx = 0; ligIdx < tuningConfig.ligatures.length; ligIdx++) {
+        var ligature = tuningConfig.ligatures[ligIdx];
+        for (var ligAv in ligature.ligAvToSymbols) {
+            var ligatureSymbols = ligature.ligAvToSymbols[ligAv];
+            if (subtractAccSym(accSymbols, ligatureSymbols) == null)
+                continue;
+
+            for (var regardingIdx = 0;
+                regardingIdx < ligature.regarding.length;
+                regardingIdx++) {
+                addIndex(ligature.regarding[regardingIdx]);
+            }
+        }
+    }
+
+    return indices;
+}
+
+function accidentalChainIndicesOverlap(a, b) {
+    for (var i = 0; i < a.length; i++) {
+        if (b.indexOf(a[i]) != -1)
+            return true;
+    }
+    return false;
+}
+
+function hasUnchainedPrimaryAccidentalSymbol(accSymbols, tuningConfig,
+    chainIndices) {
+    if (!accSymbols || chainIndices.length != 0)
+        return false;
+
+    for (var symCode in accSymbols) {
+        if (tuningConfig.usedSymbols[symCode])
+            return true;
+    }
+    return false;
+}
+
+function effectiveAccidentalSymbols(msNote, tuningConfig) {
+    if (!msNote)
+        return null;
+
+    if (!tuningConfig)
+        return normalizeAccidentalSymbols(msNote.accidentals);
+
+    var rawAttached = normalizeAccidentalSymbols(msNote.attachedAccidentals);
+    var rawNativeSymbols = normalizeAccidentalSymbols(
+        mapNativeAccidentalSymbols(msNote.nativeAccidentals, tuningConfig));
+    var rawCombined = normalizeAccidentalSymbols(
+        addAccSym(rawNativeSymbols, rawAttached));
+
+    // Compose cross-source glyph parts before filtering. A score may encode a
+    // native sharp plus an attached arrow, while the tuning declares only the
+    // single combined sharp-arrow SymbolCode.
+    var combined = removeUnusedSymbols(rawCombined, tuningConfig);
+    var attached = removeUnusedSymbols(rawAttached, tuningConfig);
+    var nativeSymbols = removeUnusedSymbols(rawNativeSymbols, tuningConfig);
+    attached = normalizeAccidentalSymbols(attached);
+    nativeSymbols = normalizeAccidentalSymbols(nativeSymbols);
+    combined = normalizeAccidentalSymbols(combined);
+
+    if (attached == null)
+        return combined || nativeSymbols;
+    if (nativeSymbols == null)
+        return combined || attached;
+
+    var attachedChains = accidentalSymbolChainIndices(attached, tuningConfig);
+    var nativeChains = accidentalSymbolChainIndices(nativeSymbols, tuningConfig);
+
+    // Plugin symbols on the same accidental chain replace a stale/conflicting
+    // native accidental. Symbols on other chains (or secondary-only symbols)
+    // augment the native accidental, supporting combinations such as a native
+    // sharp plus a plugin arrow/comma modifier.
+    if (hasUnchainedPrimaryAccidentalSymbol(
+        attached, tuningConfig, attachedChains) ||
+        accidentalChainIndicesOverlap(attachedChains, nativeChains)) {
+        return attached;
+    }
+
+    return combined || normalizeAccidentalSymbols(
+        addAccSym(nativeSymbols, attached));
+}
+
+function effectiveAccidentalHash(msNote, tuningConfig) {
+    var symbols = effectiveAccidentalSymbols(msNote, tuningConfig);
+    return symbols == null ? null : normalizeAccidentalHash(accidentalsHash(symbols));
 }
 
 function cursorKeySignatureAccidentalHashAtLine(cursor, line, tick, staffIdx, tuningConfig) {
@@ -261,7 +706,14 @@ function cursorKeySignatureAccidentalHashAtLine(cursor, line, tick, staffIdx, tu
     if (symCodes.length == 0)
         return null;
 
-    return removeUnusedSymbols(accidentalsHash(symCodes), tuningConfig);
+    var mappedSymbols = mapNativeAccidentalSymbols(
+        accidentalSymbolsFromList(symCodes),
+        tuningConfig
+    );
+    if (mappedSymbols == null)
+        return null;
+
+    return removeUnusedSymbols(accidentalsHash(mappedSymbols), tuningConfig);
 }
 
 /**
@@ -328,10 +780,10 @@ function tokenizeNote(note) {
     // log('note bbox: ' + JSON.stringify(note.bbox) +
     //     ', pagePos: ' + JSON.stringify(note.pagePos));
 
-    var hasAcc = false;
+    var hasAttachedAccidental = false;
 
     /** @type {AccidentalSymbols} */
-    var accidentals = {};
+    var attachedAccidentals = {};
 
     /** @type {PluginAPIElement[]} */
     var fingerings = [];
@@ -349,9 +801,9 @@ function tokenizeNote(note) {
                 // remember to prepend "'" to signify that it is an
                 // ASCII SymbolCode
                 var asciiSymCode = "'" + removeFormattingCode(elem.text);
-                addAccidentalSymbol(accidentals, asciiSymCode);
+                addAccidentalSymbol(attachedAccidentals, asciiSymCode);
 
-                hasAcc = true;
+                hasAttachedAccidental = true;
             } else {
                 // This is some other fingering annotation
                 // or an unprocessed accidental vector/ascii input fingering.
@@ -365,24 +817,31 @@ function tokenizeNote(note) {
             var acc = nativeAccidentalLabelToSymbolCode(elem.symbol);
 
             if (acc !== null) {
-                addAccidentalSymbol(accidentals, acc);
-                hasAcc = true;
+                addAccidentalSymbol(attachedAccidentals, acc);
+                hasAttachedAccidental = true;
             }
         }
     }
 
     var nativeAccidental = nativeAccidentalSymbolCode(note);
-    if (nativeAccidental != null && !accidentals[nativeAccidental]) {
-        addAccidentalSymbol(accidentals, nativeAccidental);
-        hasAcc = true;
-    }
+    var nativeAccidentals = null;
+    if (nativeAccidental != null)
+        nativeAccidentals = accidentalSymbolsFromList([nativeAccidental]);
+
+    var attachedAccidentalState = hasAttachedAccidental ? attachedAccidentals : null;
 
     /** @type {MSNote} */
     var msNote = { // MSNote
         midiNote: note.pitch,
         tpc: note.tpc,
         nominalsFromA4: nominals + (octavesFromA4 * 7),
-        accidentals: hasAcc ? accidentals : null,
+        // Compatibility view: plugin-attached symbols take precedence over a
+        // native accidental. The unmerged sources are retained so callers
+        // with a TuningConfig can fall back to the native symbol when the
+        // attached symbols are unrelated to the active tuning.
+        accidentals: attachedAccidentalState || nativeAccidentals,
+        attachedAccidentals: attachedAccidentalState,
+        nativeAccidentals: nativeAccidentals,
         tick: getTick(note),
         line: note.line,
         internalNote: note,
@@ -626,6 +1085,78 @@ function removeUnusedSymbols(accHashOrSymbols, tuningConfig) {
 
         return normalizeAccidentalSymbols(newAccSymbols);
     }
+}
+
+/**
+ * Extract the primary accidental spelling from an effective accidental hash.
+ * Secondary accidentals are intentionally ignored so contextual enharmonic
+ * choice can compare the primary AccidentalVector only.
+ *
+ * Matching order mirrors readNoteData(): ligatures first, then each declared
+ * accidental chain in order.
+ *
+ * @param {AccidentalHash?} accHash
+ * @param {TuningConfig} tuningConfig
+ * @returns {AccidentalHash?}
+ */
+function primaryAccidentalHash(accHash, tuningConfig) {
+    var filteredHash = removeUnusedSymbols(accHash, tuningConfig);
+    var remaining = accidentalSymbolsFromHash(filteredHash);
+    if (remaining == null)
+        return null;
+
+    var primarySymbols = [];
+
+    for (var ligIdx = 0; ligIdx < tuningConfig.ligatures.length; ligIdx++) {
+        var ligature = tuningConfig.ligatures[ligIdx];
+        var mostLigatureSymbols = 0;
+        var bestLigatureSymbols = null;
+        var bestLigatureRemaining = remaining;
+
+        for (var ligHash in ligature.ligAvToSymbols) {
+            var ligatureSymbols = ligature.ligAvToSymbols[ligHash];
+            var ligatureRemainder = subtractAccSym(remaining, ligatureSymbols);
+            if (ligatureRemainder != null &&
+                ligatureSymbols.length > mostLigatureSymbols) {
+                mostLigatureSymbols = ligatureSymbols.length;
+                bestLigatureSymbols = ligatureSymbols;
+                bestLigatureRemaining = ligatureRemainder;
+            }
+        }
+
+        if (bestLigatureSymbols != null) {
+            primarySymbols = bestLigatureSymbols.concat(primarySymbols);
+            remaining = bestLigatureRemaining;
+        }
+    }
+
+    for (var chainIdx = 0; chainIdx < tuningConfig.accChains.length; chainIdx++) {
+        var degreesSymbols = tuningConfig.accChains[chainIdx].degreesSymbols;
+        var mostChainSymbols = 0;
+        var bestChainSymbols = null;
+        var bestChainRemaining = remaining;
+
+        for (var degreeIdx = 0; degreeIdx < degreesSymbols.length; degreeIdx++) {
+            var degreeSymbols = degreesSymbols[degreeIdx];
+            if (degreeSymbols == null)
+                continue;
+
+            var chainRemainder = subtractAccSym(remaining, degreeSymbols);
+            if (chainRemainder != null &&
+                degreeSymbols.length > mostChainSymbols) {
+                mostChainSymbols = degreeSymbols.length;
+                bestChainSymbols = degreeSymbols;
+                bestChainRemaining = chainRemainder;
+            }
+        }
+
+        if (bestChainSymbols != null) {
+            primarySymbols = bestChainSymbols.concat(primarySymbols);
+            remaining = bestChainRemaining;
+        }
+    }
+
+    return primarySymbols.length == 0 ? null : accidentalsHash(primarySymbols);
 }
 
 /**

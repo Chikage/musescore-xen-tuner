@@ -824,6 +824,10 @@ function parseTuningConfig(textOrPath, isNotPath, silent) {
             2: true
         },
         usedSecondarySymbols: {},
+        // Lazily populated mapping from MuseScore-native standard accidental
+        // SymbolCodes to the active tuning's primary accidental-chain symbols.
+        nativeAccidentalMap: null,
+        unmappedNativeAccidentals: {},
         secondaryAccList: [],
         secondaryAccIndexTable: {},
         secondaryAccTable: {},
@@ -1799,10 +1803,22 @@ function parseTuningConfig(textOrPath, isNotPath, silent) {
         Object.keys(xenNotesEquaves)
             .map(function (x) { return xenNotesEquaves[x]; })
             .sort(function (a, b) {
-                if (isEnharmonicallyEquivalent(a.cents, b.cents, tuningConfig.equaveSize)) {
-                    return (a.av < b.av) ? -1 : 1;
+                if (a.cents != b.cents)
+                    return a.cents - b.cents;
+
+                var avLength = Math.min(a.av.length, b.av.length);
+                for (var avIdx = 0; avIdx < avLength; avIdx++) {
+                    if (a.av[avIdx] != b.av[avIdx])
+                        return a.av[avIdx] - b.av[avIdx];
                 }
-                return a.cents - b.cents;
+
+                if (a.av.length != b.av.length)
+                    return a.av.length - b.av.length;
+                if (a.xen.hash < b.xen.hash)
+                    return -1;
+                if (a.xen.hash > b.xen.hash)
+                    return 1;
+                return 0;
             });
 
     /*
@@ -1858,10 +1874,10 @@ function parseTuningConfig(textOrPath, isNotPath, silent) {
     // Populate enharmonic graphs:
 
     for (var i = 0; i < tuningConfig.stepsList.length; i++) {
-        var enhEquivNotes = tuningConfig.stepsList[i];
+        var allEnhEquivNotes = tuningConfig.stepsList[i];
         // true if hasImportantLigature
         var containsImportantFlag = false;
-        var importantOrNominal = enhEquivNotes.filter(function (hash) {
+        var importantOrNominal = allEnhEquivNotes.filter(function (hash) {
             var note = tuningConfig.notesTable[hash];
             if (note.hasImportantLigature) {
                 containsImportantFlag = true;
@@ -1873,6 +1889,7 @@ function parseTuningConfig(textOrPath, isNotPath, silent) {
             }
             return false;
         });
+        var enhEquivNotes = allEnhEquivNotes;
         if (containsImportantFlag) {
             // if some notes in the enharmonic equivalent list have important ligatures,
             // we only want to consider important or nominal notes.
@@ -1891,6 +1908,21 @@ function parseTuningConfig(textOrPath, isNotPath, silent) {
                 var hash = enhEquivNotes[j];
                 var nextHash = enhEquivNotes[(j + 1) % enhEquivNotes.length];
                 tuningConfig.enharmonics[hash] = nextHash;
+            }
+        }
+
+        if (containsImportantFlag && enhEquivNotes.length > 0) {
+            // Spellings excluded by important-ligature preference must still
+            // have an outgoing edge. This is especially important for existing
+            // MuseScore-native accidentals: the first enharmonic action moves
+            // them into the preferred cycle instead of becoming a no-op.
+            var preferredHash = enhEquivNotes[0];
+            for (var excludedIdx = 0;
+                excludedIdx < allEnhEquivNotes.length;
+                excludedIdx++) {
+                var excludedHash = allEnhEquivNotes[excludedIdx];
+                if (enhEquivNotes.indexOf(excludedHash) == -1)
+                    tuningConfig.enharmonics[excludedHash] = preferredHash;
             }
         }
     }
@@ -2203,8 +2235,13 @@ function nativeKeySignatureToKeySig(nativeKeySignature, tuningConfig) {
         return keySig;
     }
 
-    var symCode = count > 0 ? 5 : 6; // sharp or flat
-    var accHash = accidentalsHash([symCode]);
+    var symCode = count > 0 ? 5 : 6; // MuseScore sharp or flat
+    var mappedSymbols = nativeAccidentalSymbolsForTuning(symCode, tuningConfig);
+    if (mappedSymbols == null) {
+        warnUnmappedNativeAccidental(symCode, tuningConfig);
+        return keySig;
+    }
+    var accHash = accidentalsHash(mappedSymbols);
     var nominalOrder = count > 0 ? NATIVE_KEY_SIG_SHARP_NOMINALS : NATIVE_KEY_SIG_FLAT_NOMINALS;
     var numAccidentals = Math.abs(count);
 
@@ -2215,6 +2252,69 @@ function nativeKeySignatureToKeySig(nativeKeySignature, tuningConfig) {
     }
 
     return keySig;
+}
+
+function nativeNominalKeySignatureEntriesToKeySig(entries, tuningConfig) {
+    if (!entries || !tuningConfig || tuningConfig.numNominals != 7)
+        return null;
+
+    var keySig = [];
+    for (var i = 0; i < tuningConfig.numNominals; i++)
+        keySig.push(null);
+
+    for (var entryIdx = 0; entryIdx < entries.length; entryIdx++) {
+        var entry = entries[entryIdx];
+        if (!entry || entry.nativeNominal === undefined ||
+            entry.nativeNominal === null || !entry.symbols ||
+            entry.symbols.length == 0) {
+            continue;
+        }
+
+        var mappedEntrySymbols = mapNativeAccidentalSymbols(
+            accidentalSymbolsFromList(entry.symbols),
+            tuningConfig
+        );
+        var mappedEntryList = accidentalSymbolListFromSymbols(mappedEntrySymbols);
+        var accidentalHash = keySignatureAccidentalHashFromSymbols(mappedEntryList);
+        var tuningNominal = mod(
+            entry.nativeNominal - tuningConfig.tuningNominal,
+            tuningConfig.numNominals
+        );
+        keySig[tuningNominal] = accidentalHash;
+    }
+
+    return keySig;
+}
+
+function refreshCurrentKeySignature(parms) {
+    if (!parms || !parms.currKeySigSource) {
+        if (parms)
+            parms.currKeySig = null;
+        return;
+    }
+
+    var source = parms.currKeySigSource;
+    if (source.kind == 'native-count') {
+        parms.currKeySig = nativeKeySignatureToKeySig(
+            source.value,
+            parms.currTuning
+        );
+    } else if (source.kind == 'native-entries') {
+        parms.currKeySig = nativeNominalKeySignatureEntriesToKeySig(
+            source.value,
+            parms.currTuning
+        );
+    } else {
+        parms.currKeySig = source.value;
+    }
+}
+
+function setCurrentKeySignatureSource(parms, kind, value) {
+    parms.currKeySigSource = {
+        kind: kind,
+        value: value
+    };
+    refreshCurrentKeySignature(parms);
 }
 
 function createNativeKeySigConfigEvent(nativeKeySignature, tick) {
@@ -2229,7 +2329,7 @@ function createNativeKeySigConfigEvent(nativeKeySignature, tick) {
         tick: tick,
         priority: 20,
         config: function (parms) {
-            parms.currKeySig = nativeKeySignatureToKeySig(count, parms.currTuning);
+            setCurrentKeySignatureSource(parms, 'native-count', count);
         }
     };
 }
@@ -2540,6 +2640,8 @@ function parsePossibleConfigs(text, tick) {
                 } else {
                     parms.currTuning.relativeTuningNominal = maybeConfig.tuningNominal - parms.currTuning.tuningNominal;
                 }
+
+                refreshCurrentKeySignature(parms);
             }
         };
     }
@@ -2568,6 +2670,7 @@ function parsePossibleConfigs(text, tick) {
             tick: tick - 1,
             config: function (parms) {
                 parms.currTuning = maybeConfig;
+                refreshCurrentKeySignature(parms);
             }
         };
     }
@@ -2584,7 +2687,7 @@ function parsePossibleConfigs(text, tick) {
             tick: tick,
             priority: text.trim().match(/^keysig!(?:\s|$)/i) ? 40 : 30,
             config: function (parms) {
-                parms.currKeySig = maybeConfig;
+                setCurrentKeySignatureSource(parms, 'static', maybeConfig);
             }
         }
     }
@@ -2600,4 +2703,5 @@ function parsePossibleConfigs(text, tick) {
 function resetParms(parms) {
     parms.currTuning = generateDefaultTuningConfig();
     parms.currKeySig = null;
+    parms.currKeySigSource = null;
 }

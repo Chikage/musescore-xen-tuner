@@ -44,11 +44,12 @@ vm.createContext(context);
 });
 
 context.Lookup = context.ImportLookup();
+// MuseScore 3.6.2 libmscore/types.h AccidentalType numeric order.
 context.Accidental = {
     NONE: 0,
-    NATURAL: 1,
-    SHARP: 2,
-    FLAT: 3,
+    FLAT: 1,
+    NATURAL: 2,
+    SHARP: 3,
     SHARP2: 4,
     FLAT2: 5
 };
@@ -286,12 +287,65 @@ assert.strictEqual(
     null,
     "native NONE accidentalType should not count as an accidental"
 );
+
+var originalSymId = context.SymId;
+context.SymId = {
+    accidentalSharp: context.Accidental.FLAT,
+    accidentalFlat: context.Accidental.NATURAL,
+    accidentalNatural: context.Accidental.SHARP
+};
 assertAccidentals(
-    context.tokenizeNote(fakeNote("FLAT", [{
-        symbol: { toString: function () { return "accidentalSharp"; } }
-    }])).accidentals,
+    context.tokenizeNote(fakeNote(null, [], context.Accidental.FLAT)).accidentals,
+    { "6": 1 },
+    "MuseScore 3 FLAT enum value should not be mistaken for a SymId"
+);
+assertAccidentals(
+    context.tokenizeNote(fakeNote(null, [], context.Accidental.NATURAL)).accidentals,
+    { "2": 1 },
+    "MuseScore 3 NATURAL enum value should not be mistaken for a SymId"
+);
+assertAccidentals(
+    context.tokenizeNote(fakeNote(null, [], context.Accidental.SHARP)).accidentals,
+    { "5": 1 },
+    "MuseScore 3 SHARP enum value should not be mistaken for a SymId"
+);
+assert.strictEqual(
+    context.nativeAccidentalTypeSymbolCode(String(context.Accidental.SHARP)),
+    5,
+    "numeric accidentalType strings should resolve through the Accidental enum"
+);
+assertAccidentals(
+    context.tokenizeNote(fakeNote(
+        String(context.Accidental.SHARP),
+        [],
+        context.Accidental.SHARP
+    )).accidentals,
+    { "5": 1 },
+    "an ambiguous wrapper string should defer to note.accidentalType"
+);
+if (originalSymId === undefined) {
+    delete context.SymId;
+} else {
+    context.SymId = originalSymId;
+}
+
+var pluginSharpOverNativeFlat = context.tokenizeNote(fakeNote("FLAT", [{
+    symbol: { toString: function () { return "accidentalSharp"; } }
+}]));
+assertAccidentals(
+    pluginSharpOverNativeFlat.accidentals,
     { "5": 1 },
     "attached Xen Tuner symbols should take precedence over native accidentals"
+);
+assertAccidentals(
+    pluginSharpOverNativeFlat.attachedAccidentals,
+    { "5": 1 },
+    "tokenized notes should retain plugin-attached accidentals separately"
+);
+assertAccidentals(
+    pluginSharpOverNativeFlat.nativeAccidentals,
+    { "6": 1 },
+    "tokenized notes should retain native accidentals for tuning-aware fallback"
 );
 
 function assertKeySig(actual, expected, label) {
@@ -324,7 +378,8 @@ function assertJSONLookup(actual, expected, label) {
 
 var aReferenceTuningConfig = context.parseTuningConfig([
     "A4: 440",
-    "0c 200c 300c 500c 700c 800c 1000c 1200c"
+    "0c 200c 300c 500c 700c 800c 1000c 1200c",
+    "b (100c) #"
 ].join("\n"), true, true);
 
 assertKeySig(
@@ -347,6 +402,466 @@ assertKeySig(
     context.nativeKeySignatureToKeySig(2, cReferenceTuningConfig),
     ["5 1", null, null, "5 1", null, null, null],
     "native two-sharp key signature should map C and F for C-reference tunings"
+);
+
+var customGlyphNativeMappingTuning = context.parseTuningConfig([
+    "C4: 261.6255653005986",
+    "0c 200c 400c 500c 700c 900c 1100c 1200c",
+    "20 (100c) 21"
+].join("\n"), true, true);
+assert.ok(customGlyphNativeMappingTuning, "custom-glyph native mapping tuning should parse");
+assertAccidentals(
+    context.effectiveAccidentalSymbols(
+        context.tokenizeNote(fakeNote("SHARP")),
+        customGlyphNativeMappingTuning
+    ),
+    { "21": 1 },
+    "native sharp should map to degree +1 of the tuning's primary accidental chain"
+);
+assertAccidentals(
+    context.effectiveAccidentalSymbols(
+        context.tokenizeNote(fakeNote("FLAT")),
+        customGlyphNativeMappingTuning
+    ),
+    { "20": 1 },
+    "native flat should map to degree -1 of the tuning's primary accidental chain"
+);
+assertKeySig(
+    context.nativeKeySignatureToKeySig(1, customGlyphNativeMappingTuning),
+    [null, null, null, "21 1", null, null, null],
+    "native G-major key signature should use the tuning's mapped sharp glyph"
+);
+assert.strictEqual(
+    context.cursorKeySignatureAccidentalHashAtLine({
+        keySignatureSymbolsAtLineForStaff: function () {
+            return [{ symbol: "accidentalSharp" }];
+        }
+    }, 0, 0, 0, customGlyphNativeMappingTuning),
+    "21 1",
+    "native per-line key-signature symbols should use the same tuning mapping"
+);
+
+var multiChainCustomGlyphMappingTuning = context.parseTuningConfig([
+    "C4: 261.6255653005986",
+    "0c 200c 400c 500c 700c 900c 1100c 1200c",
+    "100 (20c) 101",
+    "20 (100c) 21"
+].join("\n"), true, true);
+assert.ok(
+    multiChainCustomGlyphMappingTuning,
+    "multi-chain custom-glyph native mapping tuning should parse"
+);
+assertAccidentals(
+    context.effectiveAccidentalSymbols(
+        context.tokenizeNote(fakeNote("SHARP")),
+        multiChainCustomGlyphMappingTuning
+    ),
+    { "21": 1 },
+    "native sharp should map to the custom chain closest to a semitone, not the first comma chain"
+);
+
+assertAccidentals(
+    context.effectiveAccidentalSymbols(pluginSharpOverNativeFlat, cReferenceTuningConfig),
+    { "5": 1 },
+    "attached accidentals used by the current tuning should remain preferred"
+);
+assert.strictEqual(
+    context.effectiveAccidentalHash(pluginSharpOverNativeFlat, cReferenceTuningConfig),
+    "5 1",
+    "effective accidental hash should use a supported attached accidental"
+);
+
+var unsupportedPluginAccidentalOverNativeFlat = context.tokenizeNote(fakeNote("FLAT", [{
+    symbol: { toString: function () { return "accidentalDoubleSharp"; } }
+}]));
+assertAccidentals(
+    unsupportedPluginAccidentalOverNativeFlat.accidentals,
+    { "4": 1 },
+    "compatibility accidental view should still prefer an attached plugin symbol"
+);
+assertAccidentals(
+    unsupportedPluginAccidentalOverNativeFlat.nativeAccidentals,
+    { "6": 1 },
+    "native accidental should remain available behind an unsupported plugin symbol"
+);
+assertAccidentals(
+    context.effectiveAccidentalSymbols(
+        unsupportedPluginAccidentalOverNativeFlat, cReferenceTuningConfig),
+    { "6": 1 },
+    "unsupported attached symbols should fall back to the native accidental"
+);
+assert.strictEqual(
+    context.effectiveAccidentalHash(
+        unsupportedPluginAccidentalOverNativeFlat, cReferenceTuningConfig),
+    "6 1",
+    "effective accidental hash should use the native fallback"
+);
+
+var twoChainNativePluginTuning = context.parseTuningConfig([
+    "C4: 261.6255653005986",
+    "0c 200c 400c 500c 700c 900c 1100c 1200c",
+    "b (100c) #",
+    "v (25c) ^",
+    "lig(1,2)!",
+    "1 1 #^"
+].join("\n"), true, true);
+assert.ok(twoChainNativePluginTuning, "two-chain native/plugin accidental tuning should parse");
+assert.strictEqual(
+    !!twoChainNativePluginTuning.usedSymbols["32"],
+    true,
+    "two-chain tuning should declare the composed sharp-up symbol"
+);
+assert.strictEqual(
+    !!twoChainNativePluginTuning.usedSymbols["41"],
+    false,
+    "two-chain tuning should not directly declare the raw arrow-up symbol"
+);
+
+var nativeSharpWithAttachedArrow = context.tokenizeNote(fakeNote("SHARP", [{
+    symbol: { toString: function () { return "accidentalArrowUp"; } }
+}]));
+assertAccidentals(
+    nativeSharpWithAttachedArrow.attachedAccidentals,
+    { "41": 1 },
+    "raw attached arrow should remain distinct before tuning-aware composition"
+);
+assertAccidentals(
+    nativeSharpWithAttachedArrow.nativeAccidentals,
+    { "5": 1 },
+    "native sharp should remain available alongside an attached second-chain arrow"
+);
+assertAccidentals(
+    context.effectiveAccidentalSymbols(
+        nativeSharpWithAttachedArrow, twoChainNativePluginTuning),
+    { "32": 1 },
+    "different-chain native and attached accidentals should compose before tuning filtering"
+);
+assert.strictEqual(
+    context.effectiveAccidentalHash(
+        nativeSharpWithAttachedArrow, twoChainNativePluginTuning),
+    "32 1",
+    "native sharp plus attached arrow should use the canonical composed hash"
+);
+
+var attachedSharpOverNativeFlatInTwoChains = context.tokenizeNote(fakeNote("FLAT", [{
+    symbol: { toString: function () { return "accidentalSharp"; } }
+}]));
+assert.strictEqual(
+    context.effectiveAccidentalHash(
+        attachedSharpOverNativeFlatInTwoChains, twoChainNativePluginTuning),
+    "5 1",
+    "attached accidental should still win over a native accidental in the same chain"
+);
+
+var stalePluginSymbol = {
+    symbol: { toString: function () { return "accidentalDoubleSharp"; } },
+    z: 1000
+};
+var userOwnedUnknownToTuningSymbol = {
+    symbol: { toString: function () { return "accidentalDoubleSharp"; } },
+    z: 20
+};
+var noteDuringTuningSwitch = fakeNote(null, [
+    stalePluginSymbol,
+    userOwnedUnknownToTuningSymbol
+], context.Accidental.NONE);
+noteDuringTuningSwitch.remove = function (element) {
+    var index = this.elements.indexOf(element);
+    if (index != -1)
+        this.elements.splice(index, 1);
+};
+noteDuringTuningSwitch.add = function (element) {
+    this.elements.push(element);
+};
+context.setAccidental(
+    noteDuringTuningSwitch,
+    [5],
+    function () {
+        throw new Error("single native sharp should not require a plugin element");
+    },
+    cReferenceTuningConfig
+);
+assert.strictEqual(
+    noteDuringTuningSwitch.elements.indexOf(stalePluginSymbol),
+    -1,
+    "tuning switch should remove stale plugin-owned symbols even when unused by the new tuning"
+);
+assert.notStrictEqual(
+    noteDuringTuningSwitch.elements.indexOf(userOwnedUnknownToTuningSymbol),
+    -1,
+    "tuning switch should preserve user-owned symbols unknown to the new tuning"
+);
+assert.strictEqual(
+    noteDuringTuningSwitch.accidentalType,
+    context.Accidental.SHARP,
+    "tuning switch should replace the stale plugin glyph with a native sharp"
+);
+
+function fakeNavigationNote(nativeAccidentalType, tick, line) {
+    var note = fakeNote(null, [], nativeAccidentalType);
+    note.pitch = 62;
+    note.tpc = 16;
+    note.parent = { parent: { tick: tick } };
+    note.line = line;
+    note.track = 0;
+    note.voice = 0;
+    return note;
+}
+
+function dNaturalNavigationData(note, tuningConfig) {
+    tuningConfig = tuningConfig || cReferenceTuningConfig;
+    return {
+        ms: {
+            internalNote: note,
+            tick: context.getTick(note)
+        },
+        xen: tuningConfig.notesTable["1"],
+        equaves: 0
+    };
+}
+
+function assertNextDSharp(nextNote, label, tuningConfig) {
+    tuningConfig = tuningConfig || cReferenceTuningConfig;
+    assert.ok(nextNote, label + " should find a next note");
+    assert.strictEqual(nextNote.matchPriorAcc, true, label + " should match prior accidental state");
+    assert.strictEqual(nextNote.nominal, 1, label + " should retain the D target nominal");
+    assert.strictEqual(nextNote.xen.nominal, 1, label + " XenNote should retain the D target nominal");
+    assert.strictEqual(nextNote.xen.hash, "1 5 1", label + " should choose D-sharp over E-flat");
+    assert.strictEqual(
+        nextNote.xen,
+        tuningConfig.notesTable["1 5 1"],
+        label + " should return the target nominal's XenNote"
+    );
+}
+
+var dNaturalUnderNativeKeySignature = fakeNavigationNote(context.Accidental.NONE, 10, 0);
+var nativeFourSharpKeySig = context.nativeKeySignatureToKeySig(4, cReferenceTuningConfig);
+assert.strictEqual(
+    nativeFourSharpKeySig[1],
+    "5 1",
+    "native four-sharp key signature should sharpen D"
+);
+var originalGetAccidental = context.getAccidental;
+var nextFromNativeKeySignature;
+context.getAccidental = function () { return null; };
+try {
+    nextFromNativeKeySignature = context.chooseNextNote(
+        1,
+        null,
+        dNaturalNavigationData(dNaturalUnderNativeKeySignature),
+        nativeFourSharpKeySig,
+        cReferenceTuningConfig,
+        0,
+        100,
+        {}
+    );
+} finally {
+    context.getAccidental = originalGetAccidental;
+}
+assertNextDSharp(
+    nextFromNativeKeySignature,
+    "chooseNextNote with a native key signature"
+);
+
+var nextFromNativeKeySignatureSymbols;
+context.getAccidental = function () { return null; };
+try {
+    nextFromNativeKeySignatureSymbols = context.chooseNextNote(
+        1,
+        null,
+        dNaturalNavigationData(dNaturalUnderNativeKeySignature),
+        null,
+        cReferenceTuningConfig,
+        0,
+        100,
+        {
+            keySignatureSymbolsAtLineForStaff: function (line, tick, staffIdx) {
+                if (line == 0 && tick == 10 && staffIdx == 0)
+                    return [{ symbol: "accidentalSharp" }];
+                return [];
+            }
+        }
+    );
+} finally {
+    context.getAccidental = originalGetAccidental;
+}
+assertNextDSharp(
+    nextFromNativeKeySignatureSymbols,
+    "chooseNextNote with MuseScore-native key-signature symbols"
+);
+
+var priorNativeDSharp = fakeNavigationNote(context.Accidental.SHARP, 0, 0);
+var dNaturalAfterNativeDSharp = fakeNavigationNote(context.Accidental.NONE, 10, 0);
+var originalReadBarState = context.readBarState;
+var nextFromNativeTemporaryAccidental;
+context.readBarState = function () {
+    return {
+        "0": {
+            "0": [
+                [[priorNativeDSharp]],
+                [],
+                [],
+                []
+            ]
+        }
+    };
+};
+try {
+    nextFromNativeTemporaryAccidental = context.chooseNextNote(
+        1,
+        null,
+        dNaturalNavigationData(dNaturalAfterNativeDSharp),
+        null,
+        cReferenceTuningConfig,
+        0,
+        100,
+        {}
+    );
+} finally {
+    context.readBarState = originalReadBarState;
+}
+assertNextDSharp(
+    nextFromNativeTemporaryAccidental,
+    "chooseNextNote with a native temporary accidental"
+);
+
+var primarySharpSecondaryCommaTuning = context.parseTuningConfig([
+    "C4: 261.6255653005986",
+    "0c 200c 400c 500c 700c 900c 1100c 1200c",
+    "b (100c) #",
+    "sec()",
+    "104 20c"
+].join("\n"), true, true);
+assert.ok(
+    primarySharpSecondaryCommaTuning,
+    "primary sharp plus secondary comma tuning should parse"
+);
+var priorNativeDSharpWithSecondaryComma = fakeNavigationNote(
+    context.Accidental.SHARP, 0, 0);
+priorNativeDSharpWithSecondaryComma.elements = [{
+    symbol: { toString: function () { return "accidentalJohnstonPlus"; } }
+}];
+var tokenizedPrimarySharpSecondaryComma = context.tokenizeNote(
+    priorNativeDSharpWithSecondaryComma);
+assert.strictEqual(
+    context.effectiveAccidentalHash(
+        tokenizedPrimarySharpSecondaryComma,
+        primarySharpSecondaryCommaTuning
+    ),
+    "5 1 104 1",
+    "effective accidental should retain native primary and plugin secondary symbols"
+);
+assert.strictEqual(
+    context.primaryAccidentalHash("5 1 104 1", primarySharpSecondaryCommaTuning),
+    "5 1",
+    "primary accidental hash should ignore a secondary comma"
+);
+
+var dNaturalAfterPrimarySharpSecondaryComma = fakeNavigationNote(
+    context.Accidental.NONE, 10, 0);
+var originalReadBarStateWithSecondary = context.readBarState;
+var nextFromPrimarySharpSecondaryComma;
+context.readBarState = function () {
+    return {
+        "0": {
+            "0": [
+                [[priorNativeDSharpWithSecondaryComma]],
+                [],
+                [],
+                []
+            ]
+        }
+    };
+};
+try {
+    nextFromPrimarySharpSecondaryComma = context.chooseNextNote(
+        1,
+        null,
+        dNaturalNavigationData(
+            dNaturalAfterPrimarySharpSecondaryComma,
+            primarySharpSecondaryCommaTuning
+        ),
+        null,
+        primarySharpSecondaryCommaTuning,
+        0,
+        100,
+        {}
+    );
+} finally {
+    context.readBarState = originalReadBarStateWithSecondary;
+}
+assertNextDSharp(
+    nextFromPrimarySharpSecondaryComma,
+    "chooseNextNote with primary sharp plus secondary comma context",
+    primarySharpSecondaryCommaTuning
+);
+
+var nominalOnlyTuning = context.parseTuningConfig([
+    "C4: 261.6255653005986",
+    "0c 200c 400c 500c 700c 900c 1100c 1200c"
+].join("\n"), true, true);
+assert.ok(nominalOnlyTuning, "nominal-only tuning should parse");
+assert.strictEqual(
+    nominalOnlyTuning.accChains.length,
+    0,
+    "nominal-only tuning should have zero accidental chains"
+);
+var nominalOnlyD = fakeNavigationNote(context.Accidental.NONE, 10, 0);
+var nominalOnlyNoteData = dNaturalNavigationData(nominalOnlyD, nominalOnlyTuning);
+var nominalOnlyUp;
+var nominalOnlyDown;
+context.getAccidental = function () { return null; };
+try {
+    assert.doesNotThrow(function () {
+        nominalOnlyUp = context.chooseNextNote(
+            1, null, nominalOnlyNoteData, null, nominalOnlyTuning, 0, 100, {});
+    }, "nominal-only chooseNextNote up should not reduce an empty accidental vector without an initial value");
+    assert.doesNotThrow(function () {
+        nominalOnlyDown = context.chooseNextNote(
+            -1, null, nominalOnlyNoteData, null, nominalOnlyTuning, 0, 100, {});
+    }, "nominal-only chooseNextNote down should not reduce an empty accidental vector without an initial value");
+} finally {
+    context.getAccidental = originalGetAccidental;
+}
+assert.strictEqual(nominalOnlyUp.xen.hash, "2", "nominal-only up should choose E from D");
+assert.strictEqual(nominalOnlyDown.xen.hash, "0", "nominal-only down should choose C from D");
+
+var importantLigatureNativeEnharmonicTuning = context.parseTuningConfig([
+    "C4: 261.6255653005986",
+    "0c 200c 400c 500c 700c 900c 1100c 1200c",
+    "b (100c) #",
+    "lig(1)!",
+    "1 20"
+].join("\n"), true, true);
+assert.ok(
+    importantLigatureNativeEnharmonicTuning,
+    "important-ligature native enharmonic tuning should parse"
+);
+assert.strictEqual(
+    importantLigatureNativeEnharmonicTuning.enharmonics["0 5 1"],
+    "0 20 1",
+    "a native sharp spelling excluded from the preferred cycle should enter the important ligature"
+);
+assert.strictEqual(
+    context.chooseNextNote(
+        0,
+        null,
+        {
+            ms: {
+                internalNote: fakeNavigationNote(context.Accidental.SHARP, 10, 0),
+                tick: 10
+            },
+            xen: importantLigatureNativeEnharmonicTuning.notesTable["0 5 1"],
+            equaves: 0
+        },
+        null,
+        importantLigatureNativeEnharmonicTuning,
+        0,
+        100,
+        {}
+    ).xen.hash,
+    "0 20 1",
+    "enharmonic cycling should convert a native sharp into the preferred important ligature"
 );
 
 var edo26JsonConfig = context.parseTuningConfig(
@@ -413,12 +928,39 @@ assert.strictEqual(
 );
 
 var nativeKeySigEvent = context.createNativeKeySigConfigEvent(2, 10);
-var nativeKeySigParms = { currTuning: cReferenceTuningConfig, currKeySig: null };
+var nativeKeySigParms = {
+    currTuning: cReferenceTuningConfig,
+    currKeySig: null,
+    currKeySigSource: null
+};
 nativeKeySigEvent.config(nativeKeySigParms);
 assertKeySig(
     nativeKeySigParms.currKeySig,
     ["5 1", null, null, "5 1", null, null, null],
     "native key signature config event should defer mapping to the active tuning config"
+);
+assert.strictEqual(
+    nativeKeySigParms.currKeySigSource.kind,
+    "native-count",
+    "native key signature event should preserve its raw source kind"
+);
+assert.strictEqual(
+    nativeKeySigParms.currKeySigSource.value,
+    2,
+    "native key signature event should preserve its raw accidental count"
+);
+var cReferenceNativeKeySigArray = nativeKeySigParms.currKeySig;
+nativeKeySigParms.currTuning = aReferenceTuningConfig;
+context.refreshCurrentKeySignature(nativeKeySigParms);
+assertKeySig(
+    nativeKeySigParms.currKeySig,
+    [null, null, "5 1", null, null, "5 1", null],
+    "native key signature source should remap after changing tuning nominal"
+);
+assert.notStrictEqual(
+    nativeKeySigParms.currKeySig,
+    cReferenceNativeKeySigArray,
+    "native key signature remap should replace the old tuning-relative array"
 );
 
 var tuningConfig = context.parseTuningConfig([

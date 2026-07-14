@@ -407,7 +407,8 @@ function chooseNextNote(direction, constantConstrictions, noteData, keySig,
         // enharmonics based on prior existing accidentals are disallowed.
 
         var priorAcc = getAccidental(
-            cursor, note, tickOfThisBar, tickOfNextBar, 2, note.line - nominalOffset);
+            cursor, note, tickOfThisBar, tickOfNextBar, 2,
+            note.line - nominalOffset, null, tuningConfig);
 
         if (priorAcc == null) {
             priorAcc = cursorKeySignatureAccidentalHashAtLine(
@@ -423,7 +424,20 @@ function chooseNextNote(direction, constantConstrictions, noteData, keySig,
         }
 
         priorAcc = removeUnusedSymbols(priorAcc, tuningConfig);
-        var priorAV = priorAcc == null ? null : tuningConfig.avTable['0 ' + priorAcc];
+        var priorXenNote = null;
+        var priorAV = null;
+        if (priorAcc != null) {
+            var priorPrimaryAcc = primaryAccidentalHash(
+                priorAcc,
+                tuningConfig
+            );
+            if (priorPrimaryAcc != null) {
+                var priorXenHash = newXenNote.nominal + ' ' + priorPrimaryAcc;
+                priorXenNote = tuningConfig.notesTable[priorXenHash];
+                if (priorXenNote != null)
+                    priorAV = tuningConfig.avTable[priorXenNote.hash];
+            }
+        }
 
         var optionAV = tuningConfig.avTable[option];
 
@@ -433,8 +447,9 @@ function chooseNextNote(direction, constantConstrictions, noteData, keySig,
 
             // Having the same accidental vector as the prior accidental
             // doesn't necessarily mean it's the exact same symbols.
-            // Make sure we use the exact same symbols as the prior accidental.
-            nextNoteObj.xen = tuningConfig.notesTable['0 ' + priorAcc];
+            // Make sure we use the exact same symbols as the prior accidental,
+            // but retain the target nominal selected for this enharmonic option.
+            nextNoteObj.xen = priorXenNote;
             return nextNoteObj;
         } else if (priorAV == null && option.split(' ').length == 1) {
             // If there's no prior accidental nor key signature accidental on this line,
@@ -465,7 +480,7 @@ function chooseNextNote(direction, constantConstrictions, noteData, keySig,
 
         var sumOfDeg = optionAV.reduce(function (acc, deg) {
             return acc + deg;
-        });
+        }, 0);
 
         nextNoteOptions.push({
             nextNote: nextNoteObj,
@@ -710,6 +725,10 @@ function restoreCursorPosition(savedPosition) {
  *  the bar, this object can be passed back to this function to reuse the bar state,
  *  so that it doesn't need to repeat `readBarState`.
  * 
+ * @param {TuningConfig?} tuningConfig
+ *  Active tuning used to decide whether plugin-attached symbols belong to
+ *  the notation. If they do not, MuseScore's native accidental is used.
+ *
  * @returns {string?} 
  *  If an accidental is found, returns the accidental hash of the
  *  {@link AccidentalSymbols} object. 
@@ -717,7 +736,7 @@ function restoreCursorPosition(savedPosition) {
  *  If no accidentals found, returns null.
  */
 function getAccidental(cursor, note, tickOfThisBar,
-    tickOfNextBar, exclude, lineOverride, reusedBarState) {
+    tickOfNextBar, exclude, lineOverride, reusedBarState, tuningConfig) {
 
     var nTick = getTick(note);
     var nLine = isNullish(lineOverride) ? note.line : lineOverride;
@@ -855,10 +874,10 @@ function getAccidental(cursor, note, tickOfThisBar,
                     var currNote = chd[nIdx];
 
                     var msNote = tokenizeNote(currNote);
+                    var accHash = effectiveAccidentalHash(msNote, tuningConfig);
 
-                    if (msNote.accidentals) {
+                    if (accHash) {
                         // we found the first explicit accidental! return it!
-                        var accHash = normalizeAccidentalHash(accidentalsHash(msNote.accidentals));
                         log('Found accidental (' + accHash + ') at: t: ' +
                             currTick + ', v: ' + voice + ', chd: ' + chdIdx + ', n: ' + nIdx);
 
