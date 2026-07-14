@@ -89,6 +89,9 @@ MuseScore {
     property int panelSizePassesRemaining: 0
     property int auxChainCount: 0
     property var auxButtonGroups: []
+    property string activeButtonOperationId: ""
+    property var pendingButtonOperation: null
+    readonly property bool buttonOperationInProgress: activeButtonOperationId.length > 0
 
     FontMetrics {
         id: logTextMetrics
@@ -105,12 +108,67 @@ MuseScore {
         font.pixelSize: pluginId.quitTextPixelSize
     }
 
+    Component {
+        id: actionButtonContentComponent
+
+        Item {
+            id: actionButtonContent
+            property var buttonControl: parent ? parent.buttonControl : null
+            property bool loading: parent ? parent.loading : false
+            property color foregroundColor: parent ? parent.foregroundColor : "white"
+
+            Text {
+                anchors.fill: parent
+                text: actionButtonContent.buttonControl ? actionButtonContent.buttonControl.text : ""
+                color: actionButtonContent.foregroundColor
+                font.pixelSize: actionButtonContent.buttonControl ? actionButtonContent.buttonControl.font.pixelSize : pluginId.controlTextPixelSize
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
+                wrapMode: Text.NoWrap
+                visible: !actionButtonContent.loading
+            }
+
+            Text {
+                anchors.centerIn: parent
+                text: "\u21BB"
+                color: actionButtonContent.foregroundColor
+                font.pixelSize: actionButtonContent.buttonControl ? actionButtonContent.buttonControl.font.pixelSize + 2 : pluginId.controlTextPixelSize + 2
+                font.bold: true
+                visible: actionButtonContent.loading
+                transformOrigin: Item.Center
+
+                RotationAnimation on rotation {
+                    from: 0
+                    to: 360
+                    duration: 700
+                    loops: Animation.Infinite
+                    running: actionButtonContent.loading
+                }
+            }
+        }
+    }
+
     function buildFilteredAuxChainOptions(maxChainIndex) {
         var options = [];
         maxChainIndex = Math.max(0, maxChainIndex);
         for (var i = 0; i <= maxChainIndex; i++)
             options.push(String(i));
         return options;
+    }
+
+    function isButtonOperationActive(operationId) {
+        return buttonOperationInProgress && activeButtonOperationId == operationId;
+    }
+
+    function beginButtonOperation(operationId, operation) {
+        if (buttonOperationInProgress || !operationId || typeof operation !== "function")
+            return false;
+
+        activeButtonOperationId = operationId;
+        pendingButtonOperation = operation;
+        buttonOperationTimer.restart();
+        return true;
     }
 
     function ensureInitialPanelSize() {
@@ -174,7 +232,10 @@ MuseScore {
         selectExisting: true
         selectMultiple: false
         onAccepted: {
-            pluginId.runLoadKeySignatureFromUrl(keySignatureFileDialog.fileUrl)
+            var selectedFileUrl = keySignatureFileDialog.fileUrl;
+            pluginId.beginButtonOperation("load-key-signature", function () {
+                pluginId.runLoadKeySignatureFromUrl(selectedFileUrl);
+            });
         }
     }
 
@@ -212,6 +273,8 @@ MuseScore {
                 implicitHeight: pluginId.controlRowHeight
                 padding: 0
                 font.pixelSize: pluginId.quitTextPixelSize
+                enabled: !pluginId.buttonOperationInProgress
+                opacity: enabled ? 1.0 : 0.45
                 onClicked: {
                     pluginId.allowClose = true;
                     handleClose();
@@ -220,8 +283,29 @@ MuseScore {
                 background: Rectangle {
                     radius: pluginId.controlCornerRadius;color: quitButton.pressed ? "#E74C3C" : "#C0392B"
                 }
-                contentItem: Text {
-                    text: quitButton.text;color: "white";font.pixelSize: quitButton.font.pixelSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter
+                contentItem: Item {
+                    readonly property int markSize: Math.max(11, Math.round(pluginId.controlRowHeight * 0.38))
+                    readonly property int markStrokeWidth: Math.max(2, Math.round(pluginId.controlRowHeight * 0.07))
+
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: parent.markSize
+                        height: parent.markStrokeWidth
+                        radius: height / 2
+                        color: "white"
+                        rotation: 45
+                        antialiasing: true
+                    }
+
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: parent.markSize
+                        height: parent.markStrokeWidth
+                        radius: height / 2
+                        color: "white"
+                        rotation: -45
+                        antialiasing: true
+                    }
                 }
             }
 
@@ -237,12 +321,17 @@ MuseScore {
                 font.pixelSize: pluginId.controlTextPixelSize
                 leftPadding: pluginId.controlHorizontalPadding
                 rightPadding: pluginId.controlHorizontalPadding
+                enabled: !pluginId.buttonOperationInProgress
+                opacity: enabled || pluginId.isButtonOperationActive("load-key-signature") ? 1.0 : 0.45
                 onClicked: pluginId.openKeySignatureFileDialog()
                 background: Rectangle {
                     radius: pluginId.controlCornerRadius;color: loadKeySignatureButton.pressed ? "#27AE60" : "#1E8449"
                 }
-                contentItem: Text {
-                    text: loadKeySignatureButton.text;color: "white";font.pixelSize: loadKeySignatureButton.font.pixelSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
+                contentItem: Loader {
+                    property var buttonControl: loadKeySignatureButton
+                    property bool loading: pluginId.isButtonOperationActive("load-key-signature")
+                    property color foregroundColor: "white"
+                    sourceComponent: actionButtonContentComponent
                 }
             }
 
@@ -259,12 +348,19 @@ MuseScore {
                 font.pixelSize: pluginId.controlTextPixelSize
                 leftPadding: pluginId.controlHorizontalPadding
                 rightPadding: pluginId.controlHorizontalPadding
-                onClicked: pluginId.runEnharmonicCycle()
+                enabled: !pluginId.buttonOperationInProgress
+                opacity: enabled || pluginId.isButtonOperationActive("enharmonic") ? 1.0 : 0.45
+                onClicked: pluginId.beginButtonOperation("enharmonic", function () {
+                    pluginId.runEnharmonicCycle();
+                })
                 background: Rectangle {
                     radius: pluginId.controlCornerRadius;color: enharmonicButton.pressed ? "#3498DB" : "#2980B9"
                 }
-                contentItem: Text {
-                    text: enharmonicButton.text;color: "white";font.pixelSize: enharmonicButton.font.pixelSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
+                contentItem: Loader {
+                    property var buttonControl: enharmonicButton
+                    property bool loading: pluginId.isButtonOperationActive("enharmonic")
+                    property color foregroundColor: "white"
+                    sourceComponent: actionButtonContentComponent
                 }
             }
         }
@@ -319,6 +415,7 @@ MuseScore {
 
                     Button {
                         id: auxUpButton
+                        property string operationId: "aux-up-" + auxButtonGroupRow.auxIndex
                         text: "Up"
                         Layout.preferredWidth: pluginId.actionButtonMinWidth
                         Layout.minimumWidth: pluginId.actionButtonMinWidth
@@ -329,17 +426,28 @@ MuseScore {
                         font.pixelSize: pluginId.controlTextPixelSize
                         leftPadding: pluginId.controlHorizontalPadding
                         rightPadding: pluginId.controlHorizontalPadding
-                        onClicked: pluginId.runAuxChainTranspose(1, auxButtonGroupRow.auxIndex)
+                        enabled: !pluginId.buttonOperationInProgress
+                        opacity: enabled || pluginId.isButtonOperationActive(operationId) ? 1.0 : 0.45
+                        onClicked: {
+                            var chainNumber = auxButtonGroupRow.auxIndex;
+                            pluginId.beginButtonOperation(operationId, function () {
+                                pluginId.runAuxChainTranspose(1, chainNumber);
+                            });
+                        }
                         background: Rectangle {
                             radius: pluginId.controlCornerRadius;color: auxUpButton.pressed ? "#27AE60" : "#1E8449"
                         }
-                        contentItem: Text {
-                            text: auxUpButton.text;color: "white";font.pixelSize: auxUpButton.font.pixelSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
+                        contentItem: Loader {
+                            property var buttonControl: auxUpButton
+                            property bool loading: pluginId.isButtonOperationActive(auxUpButton.operationId)
+                            property color foregroundColor: "white"
+                            sourceComponent: actionButtonContentComponent
                         }
                     }
 
                     Button {
                         id: auxDownButton
+                        property string operationId: "aux-down-" + auxButtonGroupRow.auxIndex
                         text: "Down"
                         Layout.preferredWidth: pluginId.actionButtonMinWidth
                         Layout.minimumWidth: pluginId.actionButtonMinWidth
@@ -350,12 +458,22 @@ MuseScore {
                         font.pixelSize: pluginId.controlTextPixelSize
                         leftPadding: pluginId.controlHorizontalPadding
                         rightPadding: pluginId.controlHorizontalPadding
-                        onClicked: pluginId.runAuxChainTranspose(-1, auxButtonGroupRow.auxIndex)
+                        enabled: !pluginId.buttonOperationInProgress
+                        opacity: enabled || pluginId.isButtonOperationActive(operationId) ? 1.0 : 0.45
+                        onClicked: {
+                            var chainNumber = auxButtonGroupRow.auxIndex;
+                            pluginId.beginButtonOperation(operationId, function () {
+                                pluginId.runAuxChainTranspose(-1, chainNumber);
+                            });
+                        }
                         background: Rectangle {
                             radius: pluginId.controlCornerRadius;color: auxDownButton.pressed ? "#E67E22" : "#D35400"
                         }
-                        contentItem: Text {
-                            text: auxDownButton.text;color: "white";font.pixelSize: auxDownButton.font.pixelSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
+                        contentItem: Loader {
+                            property var buttonControl: auxDownButton
+                            property bool loading: pluginId.isButtonOperationActive(auxDownButton.operationId)
+                            property color foregroundColor: "white"
+                            sourceComponent: actionButtonContentComponent
                         }
                     }
                 }
@@ -377,6 +495,7 @@ MuseScore {
                 id: filteredAuxTargetInput
                 model: pluginId.filteredAuxTargetOptions
                 currentIndex: 0
+                editable: true
                 Layout.preferredWidth: pluginId.filteredAuxTargetInputWidth
                 Layout.minimumWidth: pluginId.filteredAuxTargetInputWidth
                 Layout.preferredHeight: pluginId.controlRowHeight
@@ -386,6 +505,26 @@ MuseScore {
                 font.pixelSize: pluginId.controlTextPixelSize
                 leftPadding: pluginId.controlHorizontalPadding
                 rightPadding: pluginId.controlHorizontalPadding
+                indicator: Canvas {
+                    width: Math.max(10, Math.round(pluginId.controlRowHeight * 0.3))
+                    height: Math.max(6, Math.round(pluginId.controlRowHeight * 0.18))
+                    x: filteredAuxTargetInput.width - width - Math.max(4, Math.round(pluginId.controlHorizontalPadding / 2))
+                    y: Math.round((filteredAuxTargetInput.height - height) / 2)
+
+                    onPaint: {
+                        var context = getContext("2d");
+                        context.clearRect(0, 0, width, height);
+                        context.beginPath();
+                        context.moveTo(1, 1);
+                        context.lineTo(width / 2, height - 1);
+                        context.lineTo(width - 1, 1);
+                        context.lineWidth = Math.max(1.5, pluginId.controlRowHeight * 0.06);
+                        context.strokeStyle = "#404040";
+                        context.lineCap = "round";
+                        context.lineJoin = "round";
+                        context.stroke();
+                    }
+                }
                 background: Rectangle {
                     radius: pluginId.controlCornerRadius
                     color: "white"
@@ -397,6 +536,8 @@ MuseScore {
             ComboBox {
                 id: filteredAuxChainInput
                 model: pluginId.filteredAuxChainOptions
+                currentIndex: -1
+                editable: true
                 Layout.preferredWidth: pluginId.filteredAuxChainInputWidth
                 Layout.minimumWidth: pluginId.filteredAuxChainInputWidth
                 Layout.preferredHeight: pluginId.controlRowHeight
@@ -406,8 +547,31 @@ MuseScore {
                 font.pixelSize: pluginId.controlTextPixelSize
                 leftPadding: pluginId.controlHorizontalPadding
                 rightPadding: pluginId.controlHorizontalPadding
-                Component.onCompleted: pluginId.clampFilteredAuxChainInput()
-                onModelChanged: pluginId.clampFilteredAuxChainInput()
+                validator: IntValidator {
+                    bottom: 0
+                    top: Math.max(1, pluginId.auxChainCount)
+                }
+                indicator: Canvas {
+                    width: Math.max(10, Math.round(pluginId.controlRowHeight * 0.3))
+                    height: Math.max(6, Math.round(pluginId.controlRowHeight * 0.18))
+                    x: filteredAuxChainInput.width - width - Math.max(4, Math.round(pluginId.controlHorizontalPadding / 2))
+                    y: Math.round((filteredAuxChainInput.height - height) / 2)
+
+                    onPaint: {
+                        var context = getContext("2d");
+                        context.clearRect(0, 0, width, height);
+                        context.beginPath();
+                        context.moveTo(1, 1);
+                        context.lineTo(width / 2, height - 1);
+                        context.lineTo(width - 1, 1);
+                        context.lineWidth = Math.max(1.5, pluginId.controlRowHeight * 0.06);
+                        context.strokeStyle = "#404040";
+                        context.lineCap = "round";
+                        context.lineJoin = "round";
+                        context.stroke();
+                    }
+                }
+                Component.onCompleted: editText = "1"
                 background: Rectangle {
                     radius: pluginId.controlCornerRadius
                     color: "white"
@@ -429,12 +593,23 @@ MuseScore {
                 font.pixelSize: pluginId.controlTextPixelSize
                 leftPadding: pluginId.controlHorizontalPadding
                 rightPadding: pluginId.controlHorizontalPadding
-                onClicked: pluginId.runFilteredAuxChainTranspose(1, filteredAuxTargetInput.currentText, filteredAuxChainInput.currentText)
+                enabled: !pluginId.buttonOperationInProgress
+                opacity: enabled || pluginId.isButtonOperationActive("filtered-aux-up") ? 1.0 : 0.45
+                onClicked: {
+                    var targetNotes = filteredAuxTargetInput.editText;
+                    var chainNumber = filteredAuxChainInput.editText;
+                    pluginId.beginButtonOperation("filtered-aux-up", function () {
+                        pluginId.runFilteredAuxChainTranspose(1, targetNotes, chainNumber);
+                    });
+                }
                 background: Rectangle {
                     radius: pluginId.controlCornerRadius;color: filteredAuxUpButton.pressed ? "#27AE60" : "#1E8449"
                 }
-                contentItem: Text {
-                    text: filteredAuxUpButton.text;color: "white";font.pixelSize: filteredAuxUpButton.font.pixelSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
+                contentItem: Loader {
+                    property var buttonControl: filteredAuxUpButton
+                    property bool loading: pluginId.isButtonOperationActive("filtered-aux-up")
+                    property color foregroundColor: "white"
+                    sourceComponent: actionButtonContentComponent
                 }
             }
 
@@ -451,12 +626,23 @@ MuseScore {
                 font.pixelSize: pluginId.controlTextPixelSize
                 leftPadding: pluginId.controlHorizontalPadding
                 rightPadding: pluginId.controlHorizontalPadding
-                onClicked: pluginId.runFilteredAuxChainTranspose(-1, filteredAuxTargetInput.currentText, filteredAuxChainInput.currentText)
+                enabled: !pluginId.buttonOperationInProgress
+                opacity: enabled || pluginId.isButtonOperationActive("filtered-aux-down") ? 1.0 : 0.45
+                onClicked: {
+                    var targetNotes = filteredAuxTargetInput.editText;
+                    var chainNumber = filteredAuxChainInput.editText;
+                    pluginId.beginButtonOperation("filtered-aux-down", function () {
+                        pluginId.runFilteredAuxChainTranspose(-1, targetNotes, chainNumber);
+                    });
+                }
                 background: Rectangle {
                     radius: pluginId.controlCornerRadius;color: filteredAuxDownButton.pressed ? "#E67E22" : "#D35400"
                 }
-                contentItem: Text {
-                    text: filteredAuxDownButton.text;color: "white";font.pixelSize: filteredAuxDownButton.font.pixelSize;horizontalAlignment: Text.AlignHCenter;verticalAlignment: Text.AlignVCenter;elide: Text.ElideRight;wrapMode: Text.NoWrap
+                contentItem: Loader {
+                    property var buttonControl: filteredAuxDownButton
+                    property bool loading: pluginId.isButtonOperationActive("filtered-aux-down")
+                    property color foregroundColor: "white"
+                    sourceComponent: actionButtonContentComponent
                 }
             }
         }
@@ -497,6 +683,22 @@ MuseScore {
                 background: Rectangle {
                     color: "transparent"
                 }
+            }
+        }
+    }
+
+    Timer {
+        id: buttonOperationTimer
+        interval: 0
+        repeat: false
+        onTriggered: {
+            var operation = pluginId.pendingButtonOperation;
+            pluginId.pendingButtonOperation = null;
+            try {
+                if (operation)
+                    operation();
+            } finally {
+                pluginId.activeButtonOperationId = "";
             }
         }
     }
@@ -814,13 +1016,16 @@ MuseScore {
         }
     }
 
-    function clampFilteredAuxChainInput() {
+    function clampFilteredAuxChainInput(chainNumber) {
         var maxChainIndex = Math.max(0, auxChainCount);
-        var chainNumber = filteredAuxChainInput.currentIndex;
+        if (chainNumber === undefined || chainNumber === null || chainNumber === "")
+            chainNumber = filteredAuxChainInput.editText;
+        chainNumber = parseInt(chainNumber, 10);
         if (isNaN(chainNumber))
             chainNumber = maxChainIndex >= 1 ? 1 : 0;
         chainNumber = Math.max(0, Math.min(chainNumber, maxChainIndex));
         filteredAuxChainInput.currentIndex = chainNumber;
+        filteredAuxChainInput.editText = String(chainNumber);
         return chainNumber;
     }
 
@@ -857,7 +1062,7 @@ MuseScore {
     }
 
     function runFilteredAuxChainTranspose(direction, targetNotes, chainNumber) {
-        chainNumber = clampFilteredAuxChainInput();
+        chainNumber = clampFilteredAuxChainInput(chainNumber);
         Fns.preAction();
         Fns.operationFilteredAuxChainTranspose(direction, chainNumber, targetNotes);
         afterOperation();

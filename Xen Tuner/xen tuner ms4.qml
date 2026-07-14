@@ -82,6 +82,9 @@ MuseScore {
       property int panelSizePassesRemaining: 0
       property int auxChainCount: 0
       property var auxButtonGroups: []
+      property string activeButtonOperationId: ""
+      property var pendingButtonOperation: null
+      readonly property bool buttonOperationInProgress: activeButtonOperationId.length > 0
 
       FontMetrics {
         id: logTextMetrics
@@ -96,6 +99,61 @@ MuseScore {
       FontMetrics {
         id: quitTextMetrics
         font.pixelSize: pluginId.quitTextPixelSize
+      }
+
+      Component {
+        id: actionButtonContentComponent
+
+        Item {
+          id: actionButtonContent
+          property var buttonControl: parent ? parent.buttonControl : null
+          property bool loading: parent ? parent.loading : false
+          property color foregroundColor: parent ? parent.foregroundColor : "#202020"
+
+          Text {
+            anchors.fill: parent
+            text: actionButtonContent.buttonControl ? actionButtonContent.buttonControl.text : ""
+            color: actionButtonContent.foregroundColor
+            font.pixelSize: actionButtonContent.buttonControl ? actionButtonContent.buttonControl.font.pixelSize : pluginId.controlTextPixelSize
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+            wrapMode: Text.NoWrap
+            visible: !actionButtonContent.loading
+          }
+
+          Text {
+            anchors.centerIn: parent
+            text: "\u21BB"
+            color: actionButtonContent.foregroundColor
+            font.pixelSize: actionButtonContent.buttonControl ? actionButtonContent.buttonControl.font.pixelSize + 2 : pluginId.controlTextPixelSize + 2
+            font.bold: true
+            visible: actionButtonContent.loading
+            transformOrigin: Item.Center
+
+            RotationAnimation on rotation {
+              from: 0
+              to: 360
+              duration: 700
+              loops: Animation.Infinite
+              running: actionButtonContent.loading
+            }
+          }
+        }
+      }
+
+      function isButtonOperationActive(operationId) {
+        return buttonOperationInProgress && activeButtonOperationId == operationId;
+      }
+
+      function beginButtonOperation(operationId, operation) {
+        if (buttonOperationInProgress || !operationId || typeof operation !== "function")
+          return false;
+
+        activeButtonOperationId = operationId;
+        pendingButtonOperation = operation;
+        buttonOperationTimer.restart();
+        return true;
       }
 
       function ensureInitialPanelSize() {
@@ -165,7 +223,10 @@ MuseScore {
         selectExisting: true
         selectMultiple: false
         onAccepted: {
-          pluginId.runLoadKeySignatureFromUrl(keySignatureFileDialog.fileUrl)
+          var selectedFileUrl = keySignatureFileDialog.fileUrl;
+          pluginId.beginButtonOperation("load-key-signature", function () {
+            pluginId.runLoadKeySignatureFromUrl(selectedFileUrl);
+          });
         }
       }
       onPanelHeightChanged: scheduleInitialPanelSize()
@@ -211,6 +272,8 @@ GridLayout {
             implicitHeight: pluginId.controlRowHeight
             padding: 0
             font.pixelSize: pluginId.quitTextPixelSize
+            enabled: !pluginId.buttonOperationInProgress
+            opacity: enabled ? 1.0 : 0.45
             onClicked: {
                 pluginId.allowClose = true;
                 handleClose();
@@ -236,7 +299,15 @@ GridLayout {
             font.pixelSize: pluginId.controlTextPixelSize
             leftPadding: pluginId.controlHorizontalPadding
             rightPadding: pluginId.controlHorizontalPadding
+            enabled: !pluginId.buttonOperationInProgress
+            opacity: enabled || pluginId.isButtonOperationActive("load-key-signature") ? 1.0 : 0.45
             onClicked: pluginId.openKeySignatureFileDialog()
+            contentItem: Loader {
+                property var buttonControl: loadKeySignatureButton
+                property bool loading: pluginId.isButtonOperationActive("load-key-signature")
+                property color foregroundColor: "#202020"
+                sourceComponent: actionButtonContentComponent
+            }
         }
 
         Button {
@@ -252,7 +323,17 @@ GridLayout {
             font.pixelSize: pluginId.controlTextPixelSize
             leftPadding: pluginId.controlHorizontalPadding
             rightPadding: pluginId.controlHorizontalPadding
-            onClicked: pluginId.runEnharmonicCycle()
+            enabled: !pluginId.buttonOperationInProgress
+            opacity: enabled || pluginId.isButtonOperationActive("enharmonic") ? 1.0 : 0.45
+            onClicked: pluginId.beginButtonOperation("enharmonic", function () {
+                pluginId.runEnharmonicCycle();
+            })
+            contentItem: Loader {
+                property var buttonControl: enharmonicButton
+                property bool loading: pluginId.isButtonOperationActive("enharmonic")
+                property color foregroundColor: "#202020"
+                sourceComponent: actionButtonContentComponent
+            }
         }
     }
 
@@ -304,6 +385,8 @@ GridLayout {
                 }
 
                 Button {
+                    id: auxUpButton
+                    property string operationId: "aux-up-" + auxButtonGroupRow.auxIndex
                     text: "Up"
                     Layout.preferredWidth: pluginId.actionButtonMinWidth
                     Layout.minimumWidth: pluginId.actionButtonMinWidth
@@ -314,10 +397,25 @@ GridLayout {
                     font.pixelSize: pluginId.controlTextPixelSize
                     leftPadding: pluginId.controlHorizontalPadding
                     rightPadding: pluginId.controlHorizontalPadding
-                    onClicked: pluginId.runAuxChainTranspose(1, auxButtonGroupRow.auxIndex)
+                    enabled: !pluginId.buttonOperationInProgress
+                    opacity: enabled || pluginId.isButtonOperationActive(operationId) ? 1.0 : 0.45
+                    onClicked: {
+                        var chainNumber = auxButtonGroupRow.auxIndex;
+                        pluginId.beginButtonOperation(operationId, function () {
+                            pluginId.runAuxChainTranspose(1, chainNumber);
+                        });
+                    }
+                    contentItem: Loader {
+                        property var buttonControl: auxUpButton
+                        property bool loading: pluginId.isButtonOperationActive(auxUpButton.operationId)
+                        property color foregroundColor: "#202020"
+                        sourceComponent: actionButtonContentComponent
+                    }
                 }
 
                 Button {
+                    id: auxDownButton
+                    property string operationId: "aux-down-" + auxButtonGroupRow.auxIndex
                     text: "Down"
                     Layout.preferredWidth: pluginId.actionButtonMinWidth
                     Layout.minimumWidth: pluginId.actionButtonMinWidth
@@ -328,7 +426,20 @@ GridLayout {
                     font.pixelSize: pluginId.controlTextPixelSize
                     leftPadding: pluginId.controlHorizontalPadding
                     rightPadding: pluginId.controlHorizontalPadding
-                    onClicked: pluginId.runAuxChainTranspose(-1, auxButtonGroupRow.auxIndex)
+                    enabled: !pluginId.buttonOperationInProgress
+                    opacity: enabled || pluginId.isButtonOperationActive(operationId) ? 1.0 : 0.45
+                    onClicked: {
+                        var chainNumber = auxButtonGroupRow.auxIndex;
+                        pluginId.beginButtonOperation(operationId, function () {
+                            pluginId.runAuxChainTranspose(-1, chainNumber);
+                        });
+                    }
+                    contentItem: Loader {
+                        property var buttonControl: auxDownButton
+                        property bool loading: pluginId.isButtonOperationActive(auxDownButton.operationId)
+                        property color foregroundColor: "#202020"
+                        sourceComponent: actionButtonContentComponent
+                    }
                 }
             }
         }
@@ -375,6 +486,22 @@ GridLayout {
 }
 }
 
+
+      Timer {
+        id: buttonOperationTimer
+        interval: 0
+        repeat: false
+        onTriggered: {
+          var operation = pluginId.pendingButtonOperation;
+          pluginId.pendingButtonOperation = null;
+          try {
+            if (operation)
+              operation();
+          } finally {
+            pluginId.activeButtonOperationId = "";
+          }
+        }
+      }
 
       Timer {
         id: restoreLogScrollTimer
