@@ -510,7 +510,11 @@ function operationTransposeWithOverrides(stepwiseDirection, stepwiseAux, overrid
         }
     }
 
-    _curScore.createPlayEvents();
+    // Enharmonic spelling must leave the existing playback event lists exactly
+    // as they are. createPlayEvents() rebuilds Auto events before startCmd(), so
+    // it cannot be made harmless by rolling back the later command.
+    if (stepwiseDirection != 0)
+        _curScore.createPlayEvents();
 
     parms.staffConfigs = {};
     parms.bars = [];
@@ -577,8 +581,6 @@ function operationTransposeWithOverrides(stepwiseDirection, stepwiseAux, overrid
         startBarIdx = getBarBoundaries(startTick, parms.bars, true)[0];
         endBarIdx = getBarBoundaries(endTick, parms.bars, true)[1];
     }
-    var hasTransposeNoteFilter = operationHasTransposeNoteFilter(overrideConstantConstrictions);
-
     // End of config population.
     //
     //
@@ -685,13 +687,28 @@ function operationTransposeWithOverrides(stepwiseDirection, stepwiseAux, overrid
                 var lastTiedBarEndIdx = getBarBoundaries(lastTiedTick, parms.bars, true)[1];
 
                 // direction: 1: up, -1 = down, 0: enharmonic cycle.
-                executeTranspose(note, stepwiseDirection,
+                var transposeResult = executeTranspose(note, stepwiseDirection,
                     stepwiseAux, parms, newElement, cursor, overrideConstantConstrictions);
+
+                if (transposeResultFailed(transposeResult)) {
+                    _curScore.endCmd(true);
+                    continue;
+                }
+                if (transposeResultSkipped(transposeResult)) {
+                    _curScore.endCmd(true);
+                    continue;
+                }
 
                 // Remove unnecessary accidentals just for this bar.
 
-                removeUnnecessaryAccidentals(
-                    tick, tick, parms, cursor, newElement, firstTiedBarIdx, lastTiedBarEndIdx);
+                // Native redundant-accidental cleanup writes accidentalType=NONE,
+                // which lets MuseScore recalculate pitch. Never run it across an
+                // enharmonic batch containing safe-skipped spellings.
+                if (stepwiseDirection != 0) {
+                    removeUnnecessaryAccidentals(
+                        tick, tick, parms, cursor, newElement,
+                        firstTiedBarIdx, lastTiedBarEndIdx);
+                }
 
                 _curScore.endCmd();
                 _curScore.startCmd();
@@ -711,6 +728,7 @@ function operationTransposeWithOverrides(stepwiseDirection, stepwiseAux, overrid
         for (var staff = startStaff; staff <= endStaff; staff++) {
             _curScore.startCmd();
             var modifiedStaff = false;
+            var transposeStaffFailed = false;
             for (var voice = 0; voice < 4; voice++) {
 
                 // reset curr configs
@@ -762,12 +780,25 @@ function operationTransposeWithOverrides(stepwiseDirection, stepwiseAux, overrid
 
                                     // Modify pitch.
                                     if (noteMatchesTransposeFilter(note, overrideConstantConstrictions)) {
-                                        executeTranspose(note, stepwiseDirection, stepwiseAux, parms, newElement, cursor, overrideConstantConstrictions);
-                                        modifiedChord = true;
-                                        modifiedStaff = true;
+                                        var transposeResult = executeTranspose(
+                                            note, stepwiseDirection, stepwiseAux,
+                                            parms, newElement, cursor,
+                                            overrideConstantConstrictions);
+                                        if (transposeResultFailed(transposeResult)) {
+                                            transposeStaffFailed = true;
+                                            break;
+                                        }
+                                        if (!transposeResultSkipped(transposeResult)) {
+                                            modifiedChord = true;
+                                            modifiedStaff = true;
+                                        }
                                     }
                                 }
+                                if (transposeStaffFailed)
+                                    break;
                             }
+                            if (transposeStaffFailed)
+                                break;
                             var notes = cursor.element.notes;
                             for (var i = 0; i < notes.length; i++) {
                                 var note = notes[i];
@@ -778,22 +809,36 @@ function operationTransposeWithOverrides(stepwiseDirection, stepwiseAux, overrid
 
                                 // Modify pitch.
                                 if (noteMatchesTransposeFilter(note, overrideConstantConstrictions)) {
-                                    executeTranspose(note, stepwiseDirection, stepwiseAux, parms, newElement, cursor, overrideConstantConstrictions);
-                                    modifiedChord = true;
-                                    modifiedStaff = true;
+                                    var transposeResult = executeTranspose(
+                                        note, stepwiseDirection, stepwiseAux,
+                                        parms, newElement, cursor,
+                                        overrideConstantConstrictions);
+                                    if (transposeResultFailed(transposeResult)) {
+                                        transposeStaffFailed = true;
+                                        break;
+                                    }
+                                    if (!transposeResultSkipped(transposeResult)) {
+                                        modifiedChord = true;
+                                        modifiedStaff = true;
+                                    }
                                 }
                             }
-                            if (!hasTransposeNoteFilter || modifiedChord)
+                            if (transposeStaffFailed)
+                                break;
+                            if (modifiedChord)
                                 tickOfLastModified = cursor.tick;
                         }
                     }
                     cursor.next();
                 }
 
+                if (transposeStaffFailed)
+                    break;
+
                 // Don't forget to remove unnecessary accidentals for the last bit of 
                 // the selection that wasn't included in the loop above.
 
-                if (tickOfLastModified != -1) {
+                if (stepwiseDirection != 0 && tickOfLastModified != -1) {
                     removeUnnecessaryAccidentals(
                         tickOfLastModified, tickOfLastModified, parms,
                         cursor, newElement);
@@ -802,14 +847,20 @@ function operationTransposeWithOverrides(stepwiseDirection, stepwiseAux, overrid
                 // Also don't forget to auto position accidentals for the last bar.
             } // end of voices
 
-            _curScore.endCmd();
+            _curScore.endCmd(transposeStaffFailed);
+
+            if (transposeStaffFailed)
+                continue;
 
             _curScore.startCmd();
             
-            if (!hasTransposeNoteFilter || modifiedStaff) {
-                removeUnnecessaryAccidentals(
-                    startTick, endTick, parms, cursor, newElement, startBarIdx, endBarIdx
-                );
+            if (modifiedStaff) {
+                if (stepwiseDirection != 0) {
+                    removeUnnecessaryAccidentals(
+                        startTick, endTick, parms, cursor, newElement,
+                        startBarIdx, endBarIdx
+                    );
+                }
 
                 // After processing all voices in a staff,
                 // auto position accidentals in this staff in the selection range

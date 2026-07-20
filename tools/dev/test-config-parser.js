@@ -927,6 +927,671 @@ assert.strictEqual(
     "numeric JSON 0 nominal should represent the 1/1 origin"
 );
 
+assert.strictEqual(
+    context.museScoreNominalsFromA4(60, 14),
+    -5,
+    "MuseScore C4 TPC should resolve to C4 relative to A4"
+);
+assert.strictEqual(
+    context.museScoreCarrierTpc(-6, 60, 14),
+    26,
+    "B-sharp should carry a C4 MIDI pitch for a B3 Xen spelling"
+);
+assert.strictEqual(
+    context.museScoreNativeAccidentalSymbolCodeForTpc(26),
+    5,
+    "B-sharp carrier TPC should use MuseScore's native sharp"
+);
+assert.strictEqual(
+    context.museScoreCarrierTpc(-2, 60, 14),
+    null,
+    "spellings beyond MuseScore's triple-accidental TPC range should be rejected"
+);
+
+var previewFingeringRemovals = 0;
+var previewFingering = {
+    text: "#x",
+    z: context.DEFAULT_FINGERING_Z_INDEX
+};
+var previewFingeringNote = {
+    fingerings: [previewFingering],
+    internalNote: {
+        remove: function () { previewFingeringRemovals++; }
+    }
+};
+assert.strictEqual(
+    context.readFingeringAccidentalInput(
+        previewFingeringNote, edo26TxtConfig, false).symCodes.join(","),
+    "5,148",
+    "enharmonic preview should interpret fingering accidental input"
+);
+assert.strictEqual(previewFingeringRemovals, 0,
+    "enharmonic preview must not consume fingering accidental input");
+context.readFingeringAccidentalInput(
+    previewFingeringNote, edo26TxtConfig, true);
+assert.strictEqual(previewFingeringRemovals, 1,
+    "committed parsing should consume fingering accidental input exactly once");
+
+function fakeCarrierNote(pitch, tpc, line, tuning, tick) {
+    var accidentalWrites = [];
+    var note = {
+        pitch: pitch,
+        tpc: tpc,
+        tpc1: tpc,
+        tpc2: tpc,
+        line: line,
+        tuning: tuning,
+        playEvents: [{ pitch: -2, ontime: 0, len: 1000 }],
+        elements: [],
+        accidental: null,
+        tieBack: null,
+        tieForward: null,
+        track: 0,
+        voice: 0,
+        parent: { parent: { tick: tick } },
+        add: function (element) {
+            this.elements.push(element);
+        },
+        remove: function (element) {
+            var index = this.elements.indexOf(element);
+            if (index != -1)
+                this.elements.splice(index, 1);
+        },
+        is: function (other) {
+            return this === other;
+        },
+        setAccidentalSymbol: function (label) {
+            if (context.nativeAccidentalLabelToSymbolCode(label) != 5)
+                return false;
+            this.accidentalType = context.Accidental.SHARP;
+            return true;
+        },
+        accidentalWrites: accidentalWrites
+    };
+
+    Object.defineProperty(note, "accidentalType", {
+        configurable: true,
+        enumerable: true,
+        get: function () {
+            return this._accidentalType === undefined ?
+                context.Accidental.NONE : this._accidentalType;
+        },
+        set: function (value) {
+            accidentalWrites.push(value);
+
+            // These writes reproduce the old destructive enharmonic path.
+            // The carrier implementation must never reach them.
+            if (value == context.Accidental.NATURAL ||
+                value == context.Accidental.NONE) {
+                throw new Error(
+                    "enharmonic spelling must not write NATURAL/NONE");
+            }
+
+            assert.strictEqual(value, context.Accidental.SHARP,
+                "C4 to B-triple-sharp should use a B-sharp carrier");
+            assert.strictEqual(this.line, 1,
+                "carrier accidental should be applied on the target B line");
+
+            this._accidentalType = value;
+            this.accidental = {
+                accidentalType: value,
+                visible: true,
+                z: 0,
+                toString: function () { return "SHARP"; }
+            };
+
+            var tiedNote = this;
+            while (tiedNote) {
+                tiedNote.pitch = 60;
+                tiedNote.tpc = 26;
+                tiedNote.tpc1 = 26;
+                tiedNote.tpc2 = 26;
+                tiedNote = tiedNote.tieForward ?
+                    tiedNote.tieForward.endNote : null;
+            }
+        }
+    });
+
+    return note;
+}
+
+var carrierHead = fakeCarrierNote(60, 14, 0, -30.769230769230944, 10);
+var carrierTail = {
+    pitch: 60,
+    tpc: 14,
+    tpc1: 14,
+    tpc2: 14,
+    line: 0,
+    tuning: -30.769230769230944,
+    playEvents: [{ pitch: 3, ontime: 0, len: 1000 }],
+    elements: [],
+    accidental: {
+        accidentalType: context.Accidental.NATURAL,
+        visible: true,
+        z: 1700,
+        toString: function () { return "NATURAL"; }
+    },
+    tieBack: null,
+    tieForward: null,
+    track: 0,
+    voice: 0,
+    parent: { parent: { tick: 110 } },
+    add: function (element) {
+        this.elements.push(element);
+    },
+    remove: function (element) {
+        var index = this.elements.indexOf(element);
+        if (index != -1)
+            this.elements.splice(index, 1);
+    },
+    is: function (other) {
+        return this === other;
+    }
+};
+var carrierTailAccidentalWrites = [];
+Object.defineProperty(carrierTail, "accidentalType", {
+    configurable: true,
+    enumerable: true,
+    get: function () { return context.Accidental.NONE; },
+    set: function (value) {
+        carrierTailAccidentalWrites.push(value);
+        throw new Error(
+            "tied continuation must not write accidentalType without a native accidental");
+    }
+});
+var carrierTie = {
+    startNote: carrierHead,
+    endNote: carrierTail
+};
+carrierHead.tieForward = carrierTie;
+carrierTail.tieBack = carrierTie;
+carrierHead.firstTiedNote = carrierHead;
+carrierHead.lastTiedNote = carrierTail;
+carrierTail.firstTiedNote = carrierHead;
+carrierTail.lastTiedNote = carrierTail;
+
+var carrierNoteData = {
+    ms: {
+        internalNote: carrierHead,
+        tick: 10,
+        nominalsFromA4: -5
+    },
+    xen: edo26TxtConfig.notesTable["0"],
+    equaves: 0,
+    secondaryAccSyms: []
+};
+var carrierNextNote = context.chooseNextNote(
+    0, null, carrierNoteData, null, edo26TxtConfig, 0, 100, {}
+);
+assert.strictEqual(
+    carrierNextNote.xen.hash,
+    "6 5 1 148 1",
+    "26edo enharmonic cycle should spell C4 as B triple-sharp"
+);
+assert.strictEqual(
+    carrierNextNote.lineOffset,
+    1,
+    "26edo C4 to B triple-sharp should move down one staff nominal"
+);
+assert.strictEqual(
+    context.enharmonicTpcCarrier(carrierNoteData, carrierNextNote).tpc,
+    26,
+    "26edo C4 enharmonic should resolve to a B-sharp carrier"
+);
+
+var originalParseNoteForCarrier = context.parseNote;
+var originalGetBarBoundariesForCarrier = context.getBarBoundaries;
+var originalForceExplicitForCarrier = context.forceExplicitAccidentalsAfterNote;
+var originalTuneNoteForCarrier = context.tuneNote;
+var originalChooseNextNoteForCarrier = context.chooseNextNote;
+var originalElementForCarrier = context.Element;
+var originalSymIdForCarrier = context.SymId;
+var originalAlwaysExplicitForCarrier = edo26TxtConfig.alwaysExplicitAccidental;
+var forceExplicitCarrierCalls = 0;
+var tuneCarrierCalls = 0;
+var carrierHeadPlayEvents = JSON.stringify(carrierHead.playEvents);
+var carrierTailPlayEvents = JSON.stringify(carrierTail.playEvents);
+
+try {
+    edo26TxtConfig.alwaysExplicitAccidental = true;
+    context.Element = { SYMBOL: "SYMBOL", FINGERING: "FINGERING" };
+    context.SymId = {};
+    [5, 148].forEach(function (symbolCode) {
+        var label = context.Lookup.CODE_TO_LABELS[symbolCode][0];
+        context.SymId[label] = label;
+    });
+    context.parseNote = function () { return carrierNoteData; };
+    context.getBarBoundaries = function () { return [0, -1]; };
+    context.forceExplicitAccidentalsAfterNote = function () {
+        forceExplicitCarrierCalls++;
+    };
+    context.tuneNote = function () { tuneCarrierCalls++; };
+
+    context.executeTranspose(
+        carrierHead,
+        0,
+        0,
+        {
+            currTuning: edo26TxtConfig,
+            currKeySig: null,
+            bars: [0]
+        },
+        function (type) {
+            return { name: type == "FINGERING" ? "Fingering" : "Symbol" };
+        },
+        {}
+    );
+
+    assert.strictEqual(carrierHead.line, 1,
+        "enharmonic spelling should move the note to the target line");
+    assert.strictEqual(carrierHead.pitch, 60,
+        "enharmonic spelling should preserve the head MIDI pitch");
+    assert.strictEqual(carrierTail.pitch, 60,
+        "enharmonic spelling should preserve the tied tail MIDI pitch");
+    assert.strictEqual(carrierHead.tpc, 26,
+        "enharmonic head should retain the pitch-compatible B-sharp TPC");
+    assert.strictEqual(carrierTail.tpc, 26,
+        "enharmonic carrier TPC should propagate through the tie");
+    assert.strictEqual(carrierTail.line, 1,
+        "enharmonic carrier should synchronize the tied tail line immediately");
+    assert.strictEqual(carrierHead.tuning, -30.769230769230944,
+        "enharmonic spelling should preserve nonzero head tuning exactly");
+    assert.strictEqual(carrierTail.tuning, -30.769230769230944,
+        "enharmonic spelling should preserve nonzero tied-tail tuning exactly");
+    assert.strictEqual(JSON.stringify(carrierHead.playEvents), carrierHeadPlayEvents,
+        "enharmonic spelling should preserve head PlayEvents");
+    assert.strictEqual(JSON.stringify(carrierTail.playEvents), carrierTailPlayEvents,
+        "enharmonic spelling should preserve tied-tail PlayEvents");
+    assert.strictEqual(carrierHead.tieForward, carrierTie,
+        "enharmonic spelling should preserve the forward tie");
+    assert.strictEqual(carrierTail.tieBack, carrierTie,
+        "enharmonic spelling should preserve the backward tie");
+    assert.strictEqual(carrierTie.startNote, carrierHead,
+        "enharmonic spelling should preserve the tie start note");
+    assert.strictEqual(carrierTie.endNote, carrierTail,
+        "enharmonic spelling should preserve the tie end note");
+    assert.strictEqual(carrierHead.accidental.visible, false,
+        "MuseScore carrier accidental should be hidden");
+    assert.strictEqual(
+        carrierHead.accidental.z,
+        context.XEN_TPC_CARRIER_ACCIDENTAL_Z,
+        "hidden native accidental should retain the TPC carrier marker"
+    );
+    assert.strictEqual(
+        carrierHead.elements.slice().sort(function (a, b) {
+            return b.z - a.z;
+        }).map(function (element) {
+            return context.nativeAccidentalLabelToSymbolCode(element.symbol);
+        }).join(","),
+        "5,148",
+        "visible attached symbols should spell B triple-sharp"
+    );
+    assert.strictEqual(
+        carrierTail.elements.slice().sort(function (a, b) {
+            return b.z - a.z;
+        }).map(function (element) {
+            return context.nativeAccidentalLabelToSymbolCode(element.symbol);
+        }).join(","),
+        "5,148",
+        "always-explicit tied tail should use attached Xen symbols"
+    );
+    assert.strictEqual(carrierTailAccidentalWrites.length, 0,
+        "always-explicit tied tail should not invoke the destructive NONE setter");
+    assert.strictEqual(carrierTail.accidental.visible, false,
+        "an existing tied-tail accidental should become a hidden carrier");
+    assert.strictEqual(
+        carrierTail.accidental.z,
+        context.XEN_TPC_CARRIER_ACCIDENTAL_Z,
+        "an existing tied-tail accidental should retain the carrier marker"
+    );
+    assert.strictEqual(
+        context.tokenizeNote(carrierHead).nativeAccidentals,
+        null,
+        "hidden carrier accidental should not enter Xen tokenization"
+    );
+    assert.strictEqual(
+        context.effectiveAccidentalHash(
+            context.tokenizeNote(carrierHead), edo26TxtConfig),
+        "5 1 148 1",
+        "attached Xen symbols should remain the effective accidental"
+    );
+    assert.strictEqual(tuneCarrierCalls, 0,
+        "enharmonic spelling should not retune the note or its PlayEvents");
+    assert.strictEqual(forceExplicitCarrierCalls, 1,
+        "supported enharmonic spelling should prepare surrounding accidentals");
+    assert.strictEqual(
+        carrierHead.accidentalWrites.join(","),
+        String(context.Accidental.SHARP),
+        "enharmonic spelling should only set the pitch-compatible carrier accidental"
+    );
+
+    edo26TxtConfig.alwaysExplicitAccidental = false;
+    context.setAccidental(
+        carrierHead,
+        null,
+        function () {
+            throw new Error("carrier cleanup should preserve existing head glyphs");
+        },
+        edo26TxtConfig
+    );
+    assert.strictEqual(carrierHead.elements.length, 2,
+        "cleanup should preserve the carrier head's compound Xen identity");
+
+    context.setAccidental(
+        carrierTail,
+        null,
+        function () {
+            throw new Error("clearing a tied Xen glyph should not add elements");
+        },
+        edo26TxtConfig,
+        { forceAttached: true, clearAttached: true }
+    );
+    assert.strictEqual(carrierTail.elements.length, 0,
+        "non-explicit enharmonic tails should remove stale attached glyphs");
+    assert.strictEqual(carrierTailAccidentalWrites.length, 0,
+        "clearing a tied Xen glyph should not invoke accidentalType=NONE");
+    assert.strictEqual(carrierTail.accidental.visible, false,
+        "clearing a tied Xen glyph should retain its hidden TPC carrier");
+    var implicitTailToken = context.tokenizeNote(carrierTail);
+    assert.strictEqual(implicitTailToken.accidentals, null,
+        "a tied continuation must not become explicit bar accidental state");
+    assert.strictEqual(
+        context.accidentalsHash(implicitTailToken.tiedAttachedAccidentals),
+        "5 1 148 1",
+        "an implicit tied tail should inherit Xen identity only for itself"
+    );
+    var originalGetAccidentalForTie = context.getAccidental;
+    try {
+        context.getAccidental = function () { return null; };
+        assert.strictEqual(
+            context.readNoteData(
+                implicitTailToken,
+                edo26TxtConfig,
+                null,
+                100,
+                200,
+                {}
+            ).xen.hash,
+            "6 5 1 148 1",
+            "tied inheritance should parse the continuation itself as B triple-sharp"
+        );
+    } finally {
+        context.getAccidental = originalGetAccidentalForTie;
+    }
+
+    context.chooseNextNote = function () { return null; };
+    var noNextTuneCalls = tuneCarrierCalls;
+    var noNextResult = context.executeTranspose(
+        carrierHead,
+        0,
+        0,
+        {
+            currTuning: edo26TxtConfig,
+            currKeySig: null,
+            bars: [0]
+        },
+        function () { throw new Error("a skipped enharmonic must not add elements"); },
+        {}
+    );
+    assert.strictEqual(context.transposeResultSkipped(noNextResult), true,
+        "an enharmonic with no next spelling should return an explicit skip");
+    assert.strictEqual(tuneCarrierCalls, noNextTuneCalls,
+        "a skipped enharmonic should not retune or rewrite PlayEvents");
+
+    var pendingSurroundingHead = fakeCarrierNote(
+        60, 14, 0, -30.769230769230944, 25);
+    var pendingSurroundingTail = fakeCarrierNote(
+        60, 14, 0, -30.769230769230944, 125);
+    var pendingSurroundingTie = {
+        startNote: pendingSurroundingHead,
+        endNote: pendingSurroundingTail
+    };
+    pendingSurroundingHead.tieForward = pendingSurroundingTie;
+    pendingSurroundingHead.firstTiedNote = pendingSurroundingHead;
+    pendingSurroundingHead.lastTiedNote = pendingSurroundingTail;
+    pendingSurroundingTail.tieBack = pendingSurroundingTie;
+    pendingSurroundingTail.firstTiedNote = pendingSurroundingHead;
+    pendingSurroundingTail.lastTiedNote = pendingSurroundingTail;
+    pendingSurroundingHead.elements.push({
+        name: "Fingering",
+        text: "#x",
+        z: context.DEFAULT_FINGERING_Z_INDEX
+    });
+    var pendingSurroundingPlayEvents =
+        JSON.stringify(pendingSurroundingHead.playEvents);
+    var pendingSurroundingParseCalls = 0;
+    context.parseNote = function () {
+        pendingSurroundingParseCalls++;
+        throw new Error(
+            "protected surrounding preparation must skip pending fingering input");
+    };
+
+    assert.strictEqual(
+        context.makeAccidentalsExplicit(
+            pendingSurroundingHead,
+            edo26TxtConfig,
+            null,
+            0,
+            200,
+            function () {
+                throw new Error("pending surrounding input must not add elements");
+            },
+            {},
+            true
+        ),
+        true,
+        "pending accidental input on a surrounding note should be left for that note's own operation"
+    );
+    assert.strictEqual(pendingSurroundingParseCalls, 0,
+        "protected surrounding preparation should not parse or commit pending input");
+    assert.strictEqual(pendingSurroundingHead.elements.length, 1,
+        "protected surrounding preparation should leave pending fingering attached");
+    assert.strictEqual(pendingSurroundingHead.pitch, 60,
+        "pending surrounding input should preserve the tied head pitch");
+    assert.strictEqual(pendingSurroundingTail.pitch, 60,
+        "pending surrounding input should preserve the tied tail pitch");
+    assert.strictEqual(pendingSurroundingHead.tpc, 14,
+        "pending surrounding input should preserve the tied head TPC");
+    assert.strictEqual(pendingSurroundingTail.tpc, 14,
+        "pending surrounding input should preserve the tied tail TPC");
+    assert.strictEqual(pendingSurroundingHead.tieForward, pendingSurroundingTie,
+        "pending surrounding input should preserve the forward tie");
+    assert.strictEqual(pendingSurroundingTail.tieBack, pendingSurroundingTie,
+        "pending surrounding input should preserve the backward tie");
+    assert.strictEqual(
+        JSON.stringify(pendingSurroundingHead.playEvents),
+        pendingSurroundingPlayEvents,
+        "pending surrounding input should preserve PlayEvents"
+    );
+    assert.strictEqual(
+        context.makeAccidentalsExplicit(
+            pendingSurroundingTail,
+            edo26TxtConfig,
+            null,
+            0,
+            200,
+            function () {
+                throw new Error("a pending tied head must keep its tail unchanged");
+            },
+            {},
+            true
+        ),
+        true,
+        "pending accidental input on a tied head should skip tail preparation too"
+    );
+    assert.strictEqual(pendingSurroundingParseCalls, 0,
+        "a tied tail should detect pending input from its head before parsing");
+    assert.strictEqual(pendingSurroundingTail.elements.length, 0,
+        "skipping a pending tie chain should not add a tail accidental");
+    assert.strictEqual(pendingSurroundingTail.accidental, null,
+        "skipping a pending tie chain should not add a native tail carrier");
+    assert.strictEqual(
+        context.readFingeringAccidentalInput(
+            context.tokenizeNote(pendingSurroundingHead),
+            edo26TxtConfig,
+            true
+        ).symCodes.join(","),
+        "5,148",
+        "the note's own later operation should still consume the pending input"
+    );
+    assert.strictEqual(pendingSurroundingHead.elements.length, 0,
+        "the pending fingering should be consumed exactly once by its own operation"
+    );
+    assert.strictEqual(
+        context.readFingeringAccidentalInput(
+            context.tokenizeNote(pendingSurroundingHead),
+            edo26TxtConfig,
+            true
+        ),
+        null,
+        "a consumed pending fingering should not be processed twice"
+    );
+
+    var futureCompoundNote = fakeCarrierNote(
+        60, 26, 1, -30.769230769230944, 30);
+    var futureCompoundParseOptions = null;
+    context.parseNote = function () {
+        futureCompoundParseOptions = arguments[8];
+        return {
+            ms: {
+                internalNote: futureCompoundNote,
+                tick: 30,
+                nominalsFromA4: -6
+            },
+            xen: { orderedSymbols: [5, 148] },
+            secondaryAccSyms: []
+        };
+    };
+    context.makeAccidentalsExplicit(
+        futureCompoundNote,
+        edo26TxtConfig,
+        null,
+        0,
+        100,
+        function (type) {
+            return { name: type == "FINGERING" ? "Fingering" : "Symbol" };
+        },
+        {},
+        true
+    );
+    assert.strictEqual(futureCompoundParseOptions.preview, true,
+        "protected surrounding parsing should be read-only");
+    assert.strictEqual(futureCompoundNote.pitch, 60,
+        "protecting a later compound accidental should preserve MIDI pitch");
+    assert.strictEqual(futureCompoundNote.accidental.visible, false,
+        "a later compound accidental should receive a hidden native carrier");
+    assert.strictEqual(
+        futureCompoundNote.elements.slice().sort(function (a, b) {
+            return b.z - a.z;
+        }).map(function (element) {
+            return context.nativeAccidentalLabelToSymbolCode(element.symbol);
+        }).join(","),
+        "5,148",
+        "a later compound accidental should retain only its Xen display symbols"
+    );
+
+    var invalidProtectedNote = fakeCarrierNote(60, 14, 0, 0, 35);
+    context.parseNote = function () { return null; };
+    assert.strictEqual(
+        context.makeAccidentalsExplicit(
+            invalidProtectedNote,
+            edo26TxtConfig,
+            null,
+            0,
+            100,
+            function () {
+                throw new Error("invalid protected parsing must not add elements");
+            },
+            {},
+            true
+        ),
+        false,
+        "invalid protected parsing should report failure for transaction rollback"
+    );
+
+    var rejectedNote = fakeCarrierNote(60, 14, 0, 17.5, 20);
+    var rejectedNoteData = {
+        ms: {
+            internalNote: rejectedNote,
+            tick: 20,
+            nominalsFromA4: -5
+        },
+        xen: edo26TxtConfig.notesTable["0"],
+        equaves: 0,
+        secondaryAccSyms: []
+    };
+    var rejectedPlayEvents = JSON.stringify(rejectedNote.playEvents);
+    context.parseNote = function () { return rejectedNoteData; };
+    context.chooseNextNote = function () {
+        return {
+            xen: edo26TxtConfig.notesTable["3"],
+            nominal: 3,
+            equaves: 0,
+            lineOffset: -3,
+            matchPriorAcc: false
+        };
+    };
+    forceExplicitCarrierCalls = 0;
+    tuneCarrierCalls = 0;
+
+    var rejectedTransposeResult = context.executeTranspose(
+        rejectedNote,
+        0,
+        0,
+        {
+            currTuning: edo26TxtConfig,
+            currKeySig: null,
+            bars: [0]
+        },
+        function () { throw new Error("rejected spelling must not add elements"); },
+        {}
+    );
+
+    assert.strictEqual(
+        context.transposeResultFailed(rejectedTransposeResult),
+        false,
+        "unsupported spelling should be a safe skip, not a transaction failure"
+    );
+    assert.strictEqual(
+        context.transposeResultSkipped(rejectedTransposeResult),
+        true,
+        "unsupported spelling should report a skip so callers avoid cleanup"
+    );
+    assert.strictEqual(rejectedNote.line, 0,
+        "unsupported enharmonic spelling should preserve the staff line");
+    assert.strictEqual(rejectedNote.pitch, 60,
+        "unsupported enharmonic spelling should preserve MIDI pitch");
+    assert.strictEqual(rejectedNote.tpc, 14,
+        "unsupported enharmonic spelling should preserve TPC");
+    assert.strictEqual(rejectedNote.tuning, 17.5,
+        "unsupported enharmonic spelling should preserve tuning");
+    assert.strictEqual(JSON.stringify(rejectedNote.playEvents), rejectedPlayEvents,
+        "unsupported enharmonic spelling should preserve PlayEvents");
+    assert.strictEqual(rejectedNote.elements.length, 0,
+        "unsupported enharmonic spelling should preserve attached elements");
+    assert.strictEqual(rejectedNote.accidentalWrites.length, 0,
+        "unsupported enharmonic spelling should not write accidentalType");
+    assert.strictEqual(forceExplicitCarrierCalls, 0,
+        "unsupported spelling should be rejected before surrounding mutations");
+    assert.strictEqual(tuneCarrierCalls, 0,
+        "unsupported spelling should not retune the note");
+} finally {
+    edo26TxtConfig.alwaysExplicitAccidental = originalAlwaysExplicitForCarrier;
+    context.parseNote = originalParseNoteForCarrier;
+    context.getBarBoundaries = originalGetBarBoundariesForCarrier;
+    context.forceExplicitAccidentalsAfterNote = originalForceExplicitForCarrier;
+    context.tuneNote = originalTuneNoteForCarrier;
+    context.chooseNextNote = originalChooseNextNoteForCarrier;
+    if (originalElementForCarrier === undefined)
+        delete context.Element;
+    else
+        context.Element = originalElementForCarrier;
+    if (originalSymIdForCarrier === undefined)
+        delete context.SymId;
+    else
+        context.SymId = originalSymIdForCarrier;
+}
+
 var nativeKeySigEvent = context.createNativeKeySigConfigEvent(2, 10);
 var nativeKeySigParms = {
     currTuning: cReferenceTuningConfig,

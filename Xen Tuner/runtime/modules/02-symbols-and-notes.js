@@ -235,6 +235,61 @@ function nativeAccidentalTypeSymbolCode(accidentalType) {
     return null;
 }
 
+var XEN_TPC_CARRIER_ACCIDENTAL_Z = 1999;
+var MUSESCORE_NATIVE_ACCIDENTAL_DEFAULT_Z = 1700;
+
+function isMuseScoreNativeAccidentalHidden(note) {
+    if (!note || !note.accidental)
+        return false;
+
+    try {
+        return note.accidental.visible === false &&
+            note.accidental.z == XEN_TPC_CARRIER_ACCIDENTAL_Z;
+    } catch (e) {
+        return false;
+    }
+}
+
+function setMuseScoreNativeAccidentalVisibility(note, visible) {
+    if (!note || !note.accidental)
+        return false;
+
+    try {
+        if (visible && isMuseScoreNativeAccidentalHidden(note)) {
+            var defaultZ = MUSESCORE_NATIVE_ACCIDENTAL_DEFAULT_Z;
+            if (typeof Element != 'undefined' && Element !== null &&
+                Element.ACCIDENTAL !== undefined) {
+                defaultZ = Element.ACCIDENTAL * 100;
+            }
+            note.accidental.z = defaultZ;
+        }
+        note.accidental.visible = visible;
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function markMuseScoreNativeAccidentalAsTpcCarrier(note) {
+    if (!note || !note.accidental)
+        return false;
+
+    if (typeof note.markAccidentalAsTpcCarrier == 'function') {
+        try {
+            return !!note.markAccidentalAsTpcCarrier(
+                XEN_TPC_CARRIER_ACCIDENTAL_Z);
+        } catch (e) { }
+    }
+
+    try {
+        note.accidental.z = XEN_TPC_CARRIER_ACCIDENTAL_Z;
+        note.accidental.visible = false;
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
 /**
  * Convert a MuseScore-native accidental attached to a note into a Xen Tuner
  * SymbolCode. Returns null when the note has no explicit native accidental.
@@ -243,6 +298,12 @@ function nativeAccidentalTypeSymbolCode(accidentalType) {
  * @returns {SymbolCode?}
  */
 function nativeAccidentalSymbolCode(note) {
+    // Xen enharmonic spellings keep a hidden, pitch-compatible native
+    // accidental as MuseScore's TPC carrier. Only the attached Xen symbols
+    // are notation in that case.
+    if (isMuseScoreNativeAccidentalHidden(note))
+        return null;
+
     var symCode = null;
 
     var directSymbolFields = [
@@ -336,6 +397,45 @@ function nativeAccidentalTypeForSymbolCode(symCode) {
     return null;
 }
 
+function canSetMuseScoreNativeAccidentalSymbol(note, symCode) {
+    if (!note || (typeof symCode == 'string' && symCode.charAt(0) == "'"))
+        return false;
+
+    var labels = Lookup.CODE_TO_LABELS[symCode];
+    if (labels && labels.length > 0 && (
+        typeof note.setAccidentalSymbolAsTpcCarrier == 'function' ||
+        typeof note.setAccidentalSymbol == 'function')) {
+        return true;
+    }
+
+    return nativeAccidentalTypeForSymbolCode(symCode) !== null;
+}
+
+function setMuseScoreNativeAccidentalAsTpcCarrier(note, symCode) {
+    if (!note)
+        return false;
+
+    var labels = Lookup.CODE_TO_LABELS[symCode];
+    if (labels && typeof note.setAccidentalSymbolAsTpcCarrier == 'function') {
+        for (var i = 0; i < labels.length; i++) {
+            try {
+                if (note.setAccidentalSymbolAsTpcCarrier(
+                    labels[i], XEN_TPC_CARRIER_ACCIDENTAL_Z)) {
+                    return true;
+                }
+            } catch (e) { }
+        }
+        return false;
+    }
+
+    var carrierApplied = setMuseScoreNativeAccidentalSymbol(note, symCode);
+    if (carrierApplied && !note.accidental)
+        carrierApplied = setMuseScoreNativeAccidentalSymbol(note, symCode);
+
+    return carrierApplied &&
+        markMuseScoreNativeAccidentalAsTpcCarrier(note);
+}
+
 function setMuseScoreNativeAccidentalSymbol(note, symCode) {
     if (!note || (typeof symCode == 'string' && symCode.charAt(0) == "'"))
         return false;
@@ -344,8 +444,10 @@ function setMuseScoreNativeAccidentalSymbol(note, symCode) {
     if (labels && typeof note.setAccidentalSymbol == 'function') {
         for (var i = 0; i < labels.length; i++) {
             try {
-                if (note.setAccidentalSymbol(labels[i]))
+                if (note.setAccidentalSymbol(labels[i])) {
+                    setMuseScoreNativeAccidentalVisibility(note, true);
                     return true;
+                }
             } catch (e) { }
         }
     }
@@ -356,15 +458,19 @@ function setMuseScoreNativeAccidentalSymbol(note, symCode) {
 
     try {
         note.accidentalType = accidentalType;
+        setMuseScoreNativeAccidentalVisibility(note, true);
         return true;
     } catch (e2) {
         return false;
     }
 }
 
-function clearMuseScoreNativeAccidental(note) {
+function clearMuseScoreNativeAccidental(note, clearHiddenCarrier) {
     if (!note)
         return false;
+
+    if (isMuseScoreNativeAccidentalHidden(note) && !clearHiddenCarrier)
+        return true;
 
     var noneType = 0;
     try {
@@ -396,6 +502,79 @@ var MUSESCORE_STANDARD_ACCIDENTAL_DEGREES = {
     '7': -2,
     '8': -3
 };
+
+var MUSESCORE_TPC_MIN = -8;
+var MUSESCORE_TPC_MAX = 40;
+
+var MUSESCORE_NATURAL_PITCH_CLASSES_BY_NOMINAL = [
+    9,  // A
+    11, // B
+    0,  // C
+    2,  // D
+    4,  // E
+    5,  // F
+    7   // G
+];
+
+function museScoreTpcAlteration(tpc) {
+    if (tpc < MUSESCORE_TPC_MIN || tpc > MUSESCORE_TPC_MAX)
+        return null;
+    return Math.floor((tpc - MUSESCORE_TPC_MIN) / 7) - 3;
+}
+
+function museScoreTpcPitchClass(tpc) {
+    var tpcInfo = Lookup.TPC_TO_NOMINAL[tpc];
+    var alteration = museScoreTpcAlteration(tpc);
+    if (!tpcInfo || alteration === null)
+        return null;
+
+    return mod(
+        MUSESCORE_NATURAL_PITCH_CLASSES_BY_NOMINAL[tpcInfo[0]] + alteration,
+        12
+    );
+}
+
+function museScoreNominalsFromA4(midiPitch, tpc) {
+    var tpcInfo = Lookup.TPC_TO_NOMINAL[tpc];
+    if (!tpcInfo)
+        return null;
+
+    var octavesFromA4 = Math.floor((midiPitch - 69) / 12) + tpcInfo[1];
+    return tpcInfo[0] + octavesFromA4 * 7;
+}
+
+/**
+ * Find a MuseScore TPC that changes only the written nominal while retaining
+ * the current 12-EDO pitch class and octave. This mirrors MuseScore's native
+ * enharmonic invariant: spelling changes, Note.pitch does not.
+ */
+function museScoreCarrierTpc(targetNominalsFromA4, midiPitch, currentTpc) {
+    var pitchClass = museScoreTpcPitchClass(currentTpc);
+    if (pitchClass === null)
+        return null;
+
+    for (var tpc = MUSESCORE_TPC_MIN; tpc <= MUSESCORE_TPC_MAX; tpc++) {
+        if (museScoreTpcPitchClass(tpc) == pitchClass &&
+            museScoreNominalsFromA4(midiPitch, tpc) == targetNominalsFromA4) {
+            return tpc;
+        }
+    }
+
+    return null;
+}
+
+function museScoreNativeAccidentalSymbolCodeForTpc(tpc) {
+    var alteration = museScoreTpcAlteration(tpc);
+    if (alteration === null)
+        return null;
+
+    for (var symCode in MUSESCORE_STANDARD_ACCIDENTAL_DEGREES) {
+        if (MUSESCORE_STANDARD_ACCIDENTAL_DEGREES[symCode] == alteration)
+            return parseInt(symCode, 10);
+    }
+
+    return null;
+}
 
 function symbolCodeValue(symCode) {
     var numericCode = parseInt(symCode, 10);
@@ -765,9 +944,41 @@ function findGraceChord(note) {
 */
 
 
+/** Collect plugin-attached accidentals without interpreting native state. */
+function collectAttachedAccidentalState(note, collectFingerings) {
+    var hasAttachedAccidental = false;
+    var attachedAccidentals = {};
+    var fingerings = [];
+
+    for (var i = 0; i < note.elements.length; i++) {
+        var elem = note.elements[i];
+
+        if (elem.name == 'Fingering') {
+            if (elem.z >= 1000 && elem.z <= 2000) {
+                var asciiSymCode = "'" + removeFormattingCode(elem.text);
+                addAccidentalSymbol(attachedAccidentals, asciiSymCode);
+                hasAttachedAccidental = true;
+            } else if (collectFingerings) {
+                fingerings.push(elem);
+            }
+        } else if (elem.symbol) {
+            var acc = nativeAccidentalLabelToSymbolCode(elem.symbol);
+            if (acc !== null) {
+                addAccidentalSymbol(attachedAccidentals, acc);
+                hasAttachedAccidental = true;
+            }
+        }
+    }
+
+    return {
+        accidentals: hasAttachedAccidental ? attachedAccidentals : null,
+        fingerings: fingerings
+    };
+}
+
 /**
  * Reads the {@link PluginAPINote} and tokenizes it into a {@link MSNote}.
- * 
+ *
  * @param {PluginAPINote} note `PluginAPI::Note`
  * @returns {MSNote}
  */
@@ -780,55 +991,36 @@ function tokenizeNote(note) {
     // log('note bbox: ' + JSON.stringify(note.bbox) +
     //     ', pagePos: ' + JSON.stringify(note.pagePos));
 
-    var hasAttachedAccidental = false;
-
-    /** @type {AccidentalSymbols} */
-    var attachedAccidentals = {};
-
-    /** @type {PluginAPIElement[]} */
-    var fingerings = [];
-
-    for (var i = 0; i < note.elements.length; i++) {
-        // If note has a Full/Half supported accidental,
-
-        var elem = note.elements[i];
-
-        if (elem.name == 'Fingering') {
-            // Found fingering.
-
-            if (elem.z >= 1000 && elem.z <= 2000) {
-                // This is an ASCII accidental symbol.
-                // remember to prepend "'" to signify that it is an
-                // ASCII SymbolCode
-                var asciiSymCode = "'" + removeFormattingCode(elem.text);
-                addAccidentalSymbol(attachedAccidentals, asciiSymCode);
-
-                hasAttachedAccidental = true;
-            } else {
-                // This is some other fingering annotation
-                // or an unprocessed accidental vector/ascii input fingering.
-                fingerings.push(elem);
-            }
-        } else if (elem.symbol) {
-            // Check if it is an accidental symbol.
-            // Don't worry about registering accidentals not in the tuning config.
-            // That will be handled later.
-
-            var acc = nativeAccidentalLabelToSymbolCode(elem.symbol);
-
-            if (acc !== null) {
-                addAccidentalSymbol(attachedAccidentals, acc);
-                hasAttachedAccidental = true;
-            }
-        }
-    }
+    var attachedState = collectAttachedAccidentalState(note, true);
+    var attachedAccidentalState = attachedState.accidentals;
+    var fingerings = attachedState.fingerings;
 
     var nativeAccidental = nativeAccidentalSymbolCode(note);
     var nativeAccidentals = null;
     if (nativeAccidental != null)
         nativeAccidentals = accidentalSymbolsFromList([nativeAccidental]);
+    var tiedAttachedAccidentals = null;
+    var tiedNativeAccidentals = null;
 
-    var attachedAccidentalState = hasAttachedAccidental ? attachedAccidentals : null;
+    // A tied continuation inherits the written accidental identity from its
+    // head. This matters across barlines: a hidden TPC carrier is deliberately
+    // excluded above, while the Xen glyph may be implicit on continuation notes.
+    if (!attachedAccidentalState && !nativeAccidentals &&
+        note.tieBack && note.firstTiedNote) {
+        var tiedHead = note.firstTiedNote;
+        var isSameNote = tiedHead === note;
+        try {
+            isSameNote = isSameNote || tiedHead.is(note);
+        } catch (e) { }
+
+        if (!isSameNote) {
+            var tiedHeadAttached = collectAttachedAccidentalState(tiedHead, false);
+            var tiedHeadNative = nativeAccidentalSymbolCode(tiedHead);
+            tiedAttachedAccidentals = tiedHeadAttached.accidentals;
+            tiedNativeAccidentals = tiedHeadNative == null ? null :
+                accidentalSymbolsFromList([tiedHeadNative]);
+        }
+    }
 
     /** @type {MSNote} */
     var msNote = { // MSNote
@@ -842,6 +1034,10 @@ function tokenizeNote(note) {
         accidentals: attachedAccidentalState || nativeAccidentals,
         attachedAccidentals: attachedAccidentalState,
         nativeAccidentals: nativeAccidentals,
+        // Effective only for this continuation note. It must not enter
+        // BarState as an explicit accidental affecting later notes.
+        tiedAttachedAccidentals: tiedAttachedAccidentals,
+        tiedNativeAccidentals: tiedNativeAccidentals,
         tick: getTick(note),
         line: note.line,
         internalNote: note,

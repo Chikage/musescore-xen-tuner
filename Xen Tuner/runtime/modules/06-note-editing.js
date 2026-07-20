@@ -26,12 +26,30 @@
  * @param {TuningConfig} tuningConfig
  *  If provided, any accidentals symbols that are not included in the tuning config
  *  will not be altered/removed by this function.
+ * @param {Object?} options
+ * @param {boolean?} options.forceAttached
+ *  If true, render even a single native-compatible symbol as an attached
+ *  Symbol/Fingering. Hidden TPC carriers always imply this option.
+ * @param {boolean?} options.clearAttached
+ *  If true, allow a null accidental to clear attached glyphs from a hidden
+ *  carrier. Used only for implicit tied continuations, which inherit the head.
  */
-function setAccidental(note, orderedSymbols, newElement, tuningConfig) {
+function setAccidental(note, orderedSymbols, newElement, tuningConfig, options) {
 
+    options = options || {};
     var elements = note.elements;
     var elemsToRemove = [];
     var nativeAccidentalCode = nativeAccidentalSymbolCode(note);
+    var preserveTpcCarrier = isMuseScoreNativeAccidentalHidden(note);
+    var forceAttached = !!options.forceAttached || preserveTpcCarrier;
+
+    // The hidden native carrier records only the standard TPC accidental. A
+    // compound Xen spelling still needs its attached glyphs as persistent
+    // identity, even when ordinary accidental cleanup considers them redundant.
+    if ((!orderedSymbols || orderedSymbols.length == 0) &&
+        preserveTpcCarrier && !options.clearAttached) {
+        return;
+    }
 
     // First, remove any accidental symbols from note.
 
@@ -58,9 +76,11 @@ function setAccidental(note, orderedSymbols, newElement, tuningConfig) {
     });
 
     if (!orderedSymbols || orderedSymbols.length == 0) {
+        if (forceAttached)
+            return;
         if (elemsToRemove.length > 0 || !tuningConfig ||
             tuningConfigUsesAccidentalSymbol(tuningConfig, nativeAccidentalCode)) {
-            clearMuseScoreNativeAccidental(note);
+            clearMuseScoreNativeAccidental(note, !preserveTpcCarrier);
         }
         return;
     }
@@ -69,14 +89,19 @@ function setAccidental(note, orderedSymbols, newElement, tuningConfig) {
     // spelling is exactly one supported SMuFL accidental. This gives native
     // layout, accidental carry, selection, import/export and enharmonic
     // behavior while retaining plugin Symbols for compound/ASCII spellings.
-    if (orderedSymbols.length == 1 &&
+    if (!forceAttached && orderedSymbols.length == 1 &&
         setMuseScoreNativeAccidentalSymbol(note, orderedSymbols[0])) {
         return;
     }
 
     // A compound/plugin accidental replaces the native accidental rather than
-    // stacking on top of it. Its symbols below become the sole explicit state.
-    clearMuseScoreNativeAccidental(note);
+    // stacking on top of it. A hidden native accidental is retained only when
+    // it carries a pitch-compatible TPC for a Xen enharmonic spelling.
+    // Force-attached mode is used only with a pitch-compatible carrier. Never
+    // write accidentalType=NONE in that mode: tied continuations may already
+    // have the new TPC while their temporary line still has the old value.
+    if (!forceAttached)
+        clearMuseScoreNativeAccidental(note, !preserveTpcCarrier);
 
     // Create new SymId symbols and attach to note.
     var zIdx = 1000;
@@ -88,7 +113,6 @@ function setAccidental(note, orderedSymbols, newElement, tuningConfig) {
         if (typeof (symCode) == 'string' && symCode[0] == "'") {
             // Create a fingering accidental
             elem = newElement(Element.FINGERING);
-            note.add(elem);
             elem.text = escapeHTML(symCode.slice(1));
             /*  Autoplace is required for this accidental to push back prior
                 segments. */
@@ -107,13 +131,16 @@ function setAccidental(note, orderedSymbols, newElement, tuningConfig) {
             var symId = Lookup.CODE_TO_LABELS[symCode][0];
             var elem = newElement(Element.SYMBOL);
             elem.symbol = SymId[symId];
-            note.add(elem);
             elem.z = zIdx;
         }
 
         // Just put some arbitrary 1.4sp offset
         // between each symbol for now.
         elem.offsetX = -1.4 * (zIdx - 999);
+
+        // Configure plugin-owned properties before insertion so MuseScore's
+        // linked-score clone receives the same text, symbol, z and offsets.
+        note.add(elem);
 
         zIdx++;
     }
@@ -128,18 +155,73 @@ function setAccidental(note, orderedSymbols, newElement, tuningConfig) {
  * @param {number} tickOfThisBar 
  * @param {number} tickOfNextBar 
  * @param {*} newElement 
- * @param {Cursor} cursor 
+ * @param {Cursor} cursor
+ * @param {boolean?} protectWithTpcCarrier
  */
-function makeAccidentalsExplicit(note, tuningConfig, keySig, tickOfThisBar, tickOfNextBar, newElement, cursor) {
-    var noteData = parseNote(note, tuningConfig, keySig, tickOfThisBar, tickOfNextBar, cursor, newElement);
+function makeAccidentalsExplicit(
+    note, tuningConfig, keySig, tickOfThisBar, tickOfNextBar,
+    newElement, cursor, protectWithTpcCarrier
+) {
+    if (protectWithTpcCarrier) {
+        // This tie chain is only being prepared because another note is about
+        // to be respelled. Leave pending accidental entry for its own operation;
+        // consuming it here could change pitch or detach a tie incidentally.
+        // Check from the head so a later pass over an otherwise-empty tail
+        // cannot partially explicitize a chain whose head was skipped.
+        var previewNote = note.firstTiedNote || note;
+        while (previewNote) {
+            var previewMsNote = tokenizeNote(previewNote);
+            if (readFingeringAccidentalInput(
+                previewMsNote, tuningConfig, false) != null) {
+                return true;
+            }
+            previewNote = previewNote.tieForward ?
+                previewNote.tieForward.endNote : null;
+        }
+    }
+
+    var noteData = parseNote(
+        note, tuningConfig, keySig, tickOfThisBar, tickOfNextBar,
+        cursor, newElement, null,
+        protectWithTpcCarrier ? { preview: true } : null
+    );
+    if (!noteData)
+        return false;
+
     var symbols = noteData.secondaryAccSyms.concat(noteData.xen.orderedSymbols);
     log('makeAccidentalsExplicit: ' + JSON.stringify(symbols));
-    if (symbols.length != 0) {
-        setAccidental(note, symbols, newElement, tuningConfig);
-    } else {
+
+    if (symbols.length == 0) {
         // If no accidentals, also make the natural accidental explicit.
-        setAccidental(note, [2], newElement, tuningConfig);
+        symbols = [2];
     }
+
+    if (protectWithTpcCarrier) {
+        var carrierSymbolCode =
+            museScoreNativeAccidentalSymbolCodeForTpc(note.tpc);
+        var symbolsMatchCarrier = symbols.length == 1 &&
+            String(symbols[0]) == String(carrierSymbolCode);
+
+        // Native notation is already safe when its visible glyph is also the
+        // TPC carrier. Compound/microtonal notation needs a hidden carrier so
+        // MuseScore's accidental state cannot add a second visible glyph.
+        if (!symbolsMatchCarrier && carrierSymbolCode !== null) {
+            var carrier = {
+                tpc: note.tpc,
+                symbolCode: carrierSymbolCode
+            };
+            if (applyMuseScoreTpcCarrier(note, note.line, carrier)) {
+                setAccidental(note, symbols, newElement, tuningConfig, {
+                    forceAttached: true
+                });
+                return true;
+            }
+            return false;
+        }
+    }
+
+    setAccidental(note, symbols, newElement, tuningConfig);
+    return true;
 }
 
 /**
@@ -170,6 +252,124 @@ function modifyNote(note, lineOffset, orderedSymbols, newElement, tuningConfig) 
 }
 
 /**
+ * Resolve the MuseScore spelling used underneath a Xen enharmonic spelling.
+ * The carrier has the target written nominal but the same 12-EDO pitch as the
+ * current note, which preserves MuseScore's pitch/TPC invariant on save/load.
+ */
+function enharmonicTpcCarrier(noteData, nextNote) {
+    var targetNominalsFromA4 =
+        noteData.ms.nominalsFromA4 - nextNote.lineOffset;
+    var carrierTpc = museScoreCarrierTpc(
+        targetNominalsFromA4,
+        noteData.ms.internalNote.pitch,
+        noteData.ms.internalNote.tpc
+    );
+    var carrierSymbolCode = carrierTpc === null ? null :
+        museScoreNativeAccidentalSymbolCodeForTpc(carrierTpc);
+
+    if (carrierTpc === null || carrierSymbolCode === null)
+        return null;
+
+    return {
+        tpc: carrierTpc,
+        symbolCode: carrierSymbolCode,
+        targetNominalsFromA4: targetNominalsFromA4
+    };
+}
+
+function captureTpcCarrierNoteStates(note) {
+    var states = [];
+    var notePointer = note;
+
+    while (notePointer) {
+        states.push({
+            note: notePointer,
+            line: notePointer.line,
+            pitch: notePointer.pitch,
+            tpc: notePointer.tpc,
+            tpc1: notePointer.tpc1,
+            tpc2: notePointer.tpc2
+        });
+        notePointer = notePointer.tieForward ?
+            notePointer.tieForward.endNote : null;
+    }
+
+    return states;
+}
+
+function restoreTpcCarrierNoteStates(states) {
+    for (var i = 0; i < states.length; i++) {
+        var state = states[i];
+        state.note.pitch = state.pitch;
+        if (state.tpc1 !== undefined && state.tpc2 !== undefined) {
+            state.note.tpc1 = state.tpc1;
+            state.note.tpc2 = state.tpc2;
+        } else {
+            state.note.tpc = state.tpc;
+        }
+        state.note.line = state.line;
+    }
+}
+
+/**
+ * Apply and hide a native accidental whose TPC preserves the note's pitch.
+ * MuseScore propagates that TPC through ties and linked notes.
+ */
+function applyMuseScoreTpcCarrier(note, targetLine, carrier) {
+    if (!canSetMuseScoreNativeAccidentalSymbol(note, carrier.symbolCode))
+        return false;
+
+    var originalStates = captureTpcCarrierNoteStates(note);
+    var lineOffset = targetLine - originalStates[0].line;
+
+    note.line = targetLine;
+
+    var carrierApplied = setMuseScoreNativeAccidentalAsTpcCarrier(
+        note, carrier.symbolCode);
+
+    var statePreserved = carrierApplied && note.accidental;
+    for (var i = 0; statePreserved && i < originalStates.length; i++) {
+        statePreserved = originalStates[i].note.pitch == originalStates[i].pitch &&
+            originalStates[i].note.tpc == carrier.tpc;
+    }
+
+    if (!statePreserved) {
+        log('Unable to apply pitch-compatible enharmonic TPC carrier; ' +
+            'leaving the requested spelling unapplied.');
+        if (carrierApplied && note.accidental)
+            markMuseScoreNativeAccidentalAsTpcCarrier(note);
+        restoreTpcCarrierNoteStates(originalStates);
+        return false;
+    }
+
+    // MuseScore normally derives LINE during the layout triggered by endCmd().
+    // The operation continues parsing this tie chain before then, so keep its
+    // transient line/TPC state coherent immediately.
+    for (var i = 0; i < originalStates.length; i++) {
+        originalStates[i].note.line = originalStates[i].line + lineOffset;
+    }
+
+    return true;
+}
+
+function modifyNoteEnharmonically(
+    note, lineOffset, carrier, orderedSymbols, newElement, tuningConfig
+) {
+    var newLine = note.line + lineOffset;
+
+    log('modifyNoteEnharmonically(' + newLine + ', tpc: ' + carrier.tpc + ')');
+
+    if (!applyMuseScoreTpcCarrier(note, newLine, carrier))
+        return false;
+
+    setAccidental(note, orderedSymbols, newElement, tuningConfig, {
+        forceAttached: true
+    });
+
+    return true;
+}
+
+/**
  * Aggressively applies explicit accidental to ALL notes with the same Note.line 
  * as the current (old) note and the new Note.line of the modified note,
  * whose .tick values match, or come after the current note's .tick value,
@@ -191,7 +391,7 @@ function modifyNote(note, lineOffset, orderedSymbols, newElement, tuningConfig) 
  */
 function forceExplicitAccidentalsAfterNote(
     note, newLine, noteTick, tickOfThisBar, tickOfNextBar,
-    tuningConfig, keySig, cursor, newElement
+    tuningConfig, keySig, cursor, newElement, protectWithTpcCarrier
 ) {
 
     var ogCursorPos = saveCursorPosition(cursor);
@@ -222,8 +422,12 @@ function forceExplicitAccidentalsAfterNote(
                     // an accidental of a note that ties back to the current note.
                     if (!gnote.is(note) && !gnote.firstTiedNote.is(note) &&
                         (gnote.line == note.line || gnote.line == newLine)) {
-                        makeAccidentalsExplicit(gnote, tuningConfig, keySig,
-                            tickOfThisBar, tickOfNextBar, newElement, cursor);
+                        if (!makeAccidentalsExplicit(gnote, tuningConfig, keySig,
+                            tickOfThisBar, tickOfNextBar, newElement, cursor,
+                            protectWithTpcCarrier)) {
+                            restoreCursorPosition(ogCursorPos);
+                            return false;
+                        }
                     }
                 }
             }
@@ -232,8 +436,12 @@ function forceExplicitAccidentalsAfterNote(
                 var n = notes[i];
                 if (!n.is(note) && !n.firstTiedNote.is(note) &&
                     (n.line == note.line || n.line == newLine)) {
-                    makeAccidentalsExplicit(n, tuningConfig, keySig,
-                        tickOfThisBar, tickOfNextBar, newElement, cursor);
+                    if (!makeAccidentalsExplicit(n, tuningConfig, keySig,
+                        tickOfThisBar, tickOfNextBar, newElement, cursor,
+                        protectWithTpcCarrier)) {
+                        restoreCursorPosition(ogCursorPos);
+                        return false;
+                    }
                 }
             }
 
@@ -242,6 +450,7 @@ function forceExplicitAccidentalsAfterNote(
     }
 
     restoreCursorPosition(ogCursorPos);
+    return true;
 }
 
 /**
@@ -316,6 +525,28 @@ function getTransposeConstantConstrictions(tuningConfig, aux, overrideConstantCo
     return overrideConstantConstrictions || tuningConfig.auxList[aux];
 }
 
+function transposeFailureResult(reason) {
+    return {
+        xenTransposeFailed: true,
+        reason: reason || 'unknown'
+    };
+}
+
+function transposeSkippedResult(reason) {
+    return {
+        xenTransposeSkipped: true,
+        reason: reason || 'no-op'
+    };
+}
+
+function transposeResultFailed(result) {
+    return !!(result && result.xenTransposeFailed === true);
+}
+
+function transposeResultSkipped(result) {
+    return !!(result && result.xenTransposeSkipped === true);
+}
+
 function executeTranspose(note, direction, aux, parms, newElement, cursor, overrideConstantConstrictions) {
     var tuningConfig = parms.currTuning;
     var keySig = parms.currKeySig; // may be null/invalid
@@ -331,11 +562,17 @@ function executeTranspose(note, direction, aux, parms, newElement, cursor, overr
     var barBoundaries = getBarBoundaries(noteTick, bars, false);
     var tickOfThisBar = barBoundaries[0];
     var tickOfNextBar = barBoundaries[1];
+    var isEnharmonic = direction == 0;
+    var originalEnharmonicPitch = isEnharmonic ? note.pitch : null;
 
     log('executeTranspose(' + direction + ', ' + aux + '). Tick: ' + noteTick);
 
-    var noteData = parseNote(note, tuningConfig, keySig,
-        tickOfThisBar, tickOfNextBar, cursor, newElement);
+    // Enharmonic carrier compatibility must be known before parsing consumes
+    // fingering input or rewrites accidental elements.
+    var noteData = parseNote(
+        note, tuningConfig, keySig, tickOfThisBar, tickOfNextBar,
+        cursor, newElement, null, isEnharmonic ? { preview: true } : null
+    );
 
     // STEP 1: Choose the next note.
     var nextNote = chooseNextNote(
@@ -344,7 +581,11 @@ function executeTranspose(note, direction, aux, parms, newElement, cursor, overr
 
     if (!nextNote) {
         // If no next note (e.g. no enharmonic)
-        // simple do nothing, return bar state.
+        // simple do nothing, return bar state. Enharmonic operations must not
+        // retune or rebuild PlayEvents when there is no alternate spelling.
+        if (isEnharmonic)
+            return transposeSkippedResult('no-next-enharmonic');
+
         var newBarState = {};
         tuneNote(note, keySig, tuningConfig, tickOfThisBar, tickOfNextBar, cursor, newBarState, newElement);
 
@@ -354,14 +595,38 @@ function executeTranspose(note, direction, aux, parms, newElement, cursor, overr
     // log('nextNote: ' + JSON.stringify(nextNote));
 
     var newLine = note.line + nextNote.lineOffset;
+    var carrier = null;
+
+    // Reject unsupported spellings before changing this note or surrounding
+    // accidental state. MuseScore cannot persist a pitch/TPC mismatch.
+    if (isEnharmonic) {
+        carrier = enharmonicTpcCarrier(noteData, nextNote);
+        if (!carrier || !canSetMuseScoreNativeAccidentalSymbol(
+            note, carrier.symbolCode)) {
+            log('No pitch-compatible MuseScore TPC carrier for enharmonic ' +
+                noteData.xen.hash + ' -> ' + nextNote.xen.hash + '.');
+            return transposeSkippedResult('no-pitch-compatible-carrier');
+        }
+    }
+
+    if (isEnharmonic && noteData.updatedSymbols) {
+        noteData = parseNote(
+            note, tuningConfig, keySig, tickOfThisBar, tickOfNextBar,
+            cursor, newElement, null, { protectWithTpcCarrier: true }
+        );
+        if (!noteData || note.pitch != originalEnharmonicPitch)
+            return transposeFailureResult('fingering-input-changed-pitch');
+    }
 
     // STEP 2: Apply explicit accidentals on notes that may be affected
     //         by the modification process.
 
-    forceExplicitAccidentalsAfterNote(
+    var accidentalsPrepared = forceExplicitAccidentalsAfterNote(
         note, newLine, noteTick, tickOfThisBar, tickOfNextBar,
-        tuningConfig, keySig, cursor, newElement
+        tuningConfig, keySig, cursor, newElement, isEnharmonic
     );
+    if (accidentalsPrepared === false)
+        return transposeFailureResult('surrounding-carrier-application-failed');
 
     //
     // STEP 3
@@ -381,7 +646,6 @@ function executeTranspose(note, direction, aux, parms, newElement, cursor, overr
     // Here we need to check whether or not to include prior secondary
     // accidentals in the new note depending on the operation.
 
-    var isEnharmonic = direction == 0;
     var isDiatonic = !isEnharmonic && constantConstrictions &&
         constantConstrictions.length == tuningConfig.accChains.length && constantConstrictions.indexOf(0) == -1;
     var isNonDiatonicTranspose = !isEnharmonic && !isDiatonic;
@@ -403,12 +667,25 @@ function executeTranspose(note, direction, aux, parms, newElement, cursor, overr
         accSymbols = null;
     }
 
-    modifyNote(note, nextNote.lineOffset, accSymbols, newElement, tuningConfig);
+    var noteModified;
+    if (isEnharmonic) {
+        noteModified = modifyNoteEnharmonically(
+            note, nextNote.lineOffset, carrier, accSymbols,
+            newElement, tuningConfig);
+    } else {
+        modifyNote(note, nextNote.lineOffset, accSymbols,
+            newElement, tuningConfig);
+        noteModified = true;
+    }
 
-    if (tuningConfig.alwaysExplicitAccidental) {
+    if (!noteModified)
+        return transposeFailureResult('carrier-application-failed');
+
+    if (isEnharmonic || tuningConfig.alwaysExplicitAccidental) {
         // if we're in explicit accidentals/atonal mode, make sure that explicit
         // accidentals also appear on all tied notes, and that these accidentals are
-        // updated.
+        // updated. Enharmonic mode also clears stale attached accidentals and
+        // hides any native carrier on tied continuations.
 
         // We don't have to worry about these accidentals affecting subsequent notes
         // in the next bar (if the tie carries over a barline), because we're in
@@ -416,7 +693,24 @@ function executeTranspose(note, direction, aux, parms, newElement, cursor, overr
         var notePointer = note;
         while (notePointer.tieForward) {
             notePointer = notePointer.tieForward.endNote;
-            setAccidental(notePointer, accSymbols, newElement, tuningConfig);
+            if (isEnharmonic && notePointer.accidental &&
+                !markMuseScoreNativeAccidentalAsTpcCarrier(notePointer)) {
+                return transposeFailureResult('tied-carrier-mark-failed');
+            }
+            if (isEnharmonic) {
+                setAccidental(
+                    notePointer,
+                    tuningConfig.alwaysExplicitAccidental ? accSymbols : null,
+                    newElement,
+                    tuningConfig,
+                    {
+                        forceAttached: true,
+                        clearAttached: !tuningConfig.alwaysExplicitAccidental
+                    }
+                );
+            } else {
+                setAccidental(notePointer, accSymbols, newElement, tuningConfig);
+            }
         }
     }
 
@@ -425,6 +719,12 @@ function executeTranspose(note, direction, aux, parms, newElement, cursor, overr
     //
 
     var newBarState = {};
+
+    // Enharmonic spellings are the same sounding Xen pitch. The carrier path
+    // deliberately leaves tuning and PlayEvents byte-for-byte unchanged.
+    if (isEnharmonic)
+        return newBarState;
+
     tuneNote(note, keySig, tuningConfig, tickOfThisBar, tickOfNextBar, cursor, newBarState, newElement);
 
     return newBarState;

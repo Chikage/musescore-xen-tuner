@@ -36,7 +36,11 @@ function getNominal(msNote, tuningConfig) {
  *      The parsed note data. If the note's accidentals are not valid within the
  *      declared TuningConfig, returns `null`.
  */
-function readNoteData(msNote, tuningConfig, keySig, tickOfThisBar, tickOfNextBar, cursor, reusedBarState) {
+function readNoteData(
+    msNote, tuningConfig, keySig, tickOfThisBar, tickOfNextBar,
+    cursor, reusedBarState, options
+) {
+    options = options || {};
     // Convert nominalsFromA4 to nominals from tuning note.
 
     var debugStr = ''; // to be printed during error
@@ -50,11 +54,26 @@ function readNoteData(msNote, tuningConfig, keySig, tickOfThisBar, tickOfNextBar
         cursor, msNote.internalNote, tickOfThisBar, tickOfNextBar, 0, null,
         reusedBarState, tuningConfig);
 
-    var accSyms = accidentalSymbolsFromHash(currAccStateHash);
+    // A tie continuation retains the head's pitch identity, but does not set
+    // accidental state for following notes in this measure.
+    var tiedAccSyms = null;
+    if (msNote.tiedAttachedAccidentals || msNote.tiedNativeAccidentals) {
+        tiedAccSyms = effectiveAccidentalSymbols({
+            accidentals: msNote.tiedAttachedAccidentals ||
+                msNote.tiedNativeAccidentals,
+            attachedAccidentals: msNote.tiedAttachedAccidentals,
+            nativeAccidentals: msNote.tiedNativeAccidentals
+        }, tuningConfig);
+    }
+    var accSyms = tiedAccSyms || accidentalSymbolsFromHash(currAccStateHash);
     accSyms = removeUnusedSymbols(accSyms, tuningConfig);
 
     // Check fingerings for accidental declarations
-    var maybeFingeringAccSymbols = readFingeringAccidentalInput(msNote, tuningConfig);
+    var maybeFingeringAccSymbols = readFingeringAccidentalInput(
+        msNote,
+        tuningConfig,
+        options.consumeFingeringInput !== false
+    );
     if (maybeFingeringAccSymbols != null) {
         // log('found fingering acc input: ' + JSON.stringify(maybeFingeringAccSymbols.symCodes));
         if (!CLEAR_ACCIDENTALS_AFTER_ASCII_ENTRY &&
@@ -357,7 +376,8 @@ function parseAsciiAccInput(str, tuningConfig) {
  * `type` property which is either 'av' or 'ascii' depending on what kind of
  * fingering created the new accidental symbols.
  */
-function readFingeringAccidentalInput(msNote, tuningConfig) {
+function readFingeringAccidentalInput(msNote, tuningConfig, consumeInput) {
+    consumeInput = consumeInput !== false;
     for (var i = 0; i < msNote.fingerings.length; i++) {
         // Loop through all non-accidental fingerings attached to this note.
 
@@ -378,7 +398,8 @@ function readFingeringAccidentalInput(msNote, tuningConfig) {
         if (maybeSymCodes != null) {
             // These new accidental symbols are converted from the 
             // ascii-representation fingering.
-            msNote.internalNote.remove(fingering);
+            if (consumeInput)
+                msNote.internalNote.remove(fingering);
             return {
                 symCodes: maybeSymCodes,
                 type: 'ascii',
@@ -420,7 +441,8 @@ function readFingeringAccidentalInput(msNote, tuningConfig) {
                 }
 
                 // remove the fingering.
-                msNote.internalNote.remove(fingering);
+                if (consumeInput)
+                    msNote.internalNote.remove(fingering);
 
                 var orderedSymbols = tuningConfig.avToSymbols[av];
 
@@ -458,15 +480,27 @@ function readFingeringAccidentalInput(msNote, tuningConfig) {
  * @param {BarState?} reusedBarState See parm description of {@link getAccidental()}.
  * @returns {NoteData} NoteData object
  */
-function parseNote(note, tuningConfig, keySig, tickOfThisBar, tickOfNextBar, cursor, newElement, reusedBarState) {
+function parseNote(
+    note, tuningConfig, keySig, tickOfThisBar, tickOfNextBar,
+    cursor, newElement, reusedBarState, options
+) {
+    options = options || {};
     var msNote = tokenizeNote(note);
-    var noteData = readNoteData(msNote, tuningConfig, keySig, tickOfThisBar, tickOfNextBar, cursor, reusedBarState);
+    var noteData = readNoteData(
+        msNote, tuningConfig, keySig, tickOfThisBar, tickOfNextBar,
+        cursor, reusedBarState, {
+            consumeFingeringInput: !options.preview
+        }
+    );
 
-    if (noteData && noteData.updatedSymbols) {
-        forceExplicitAccidentalsAfterNote(
+    if (!options.preview && noteData && noteData.updatedSymbols) {
+        var accidentalsPrepared = forceExplicitAccidentalsAfterNote(
             note, note.line, noteData.ms.tick, tickOfThisBar, tickOfNextBar,
-            tuningConfig, keySig, cursor, newElement
+            tuningConfig, keySig, cursor, newElement,
+            !!options.protectWithTpcCarrier
         );
+        if (accidentalsPrepared === false)
+            return null;
 
         // update new symbols if fingering-based accidental entry is performed.
         setAccidental(note, noteData.updatedSymbols, newElement, tuningConfig);
