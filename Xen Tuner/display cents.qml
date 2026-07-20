@@ -27,7 +27,6 @@ import QtQuick 2.9
 import QtQuick.Controls 2.2
 import QtQuick.Window 2.2
 import QtQuick.Layouts 1.2
-import Qt.labs.settings 1.0
 import FileIO 3.0
 
 MuseScore {
@@ -35,9 +34,29 @@ MuseScore {
       description: "Create fingerings to display cent offsets of notes.\n\n" +
         "Applies to selection, or entire score if nothing is selected."
       menuPath: "Plugins.Xen Tuner.Display Cents"
-      readonly property var pluginHomePath: Qt.resolvedUrl("../").replace("file:///", "")
+      readonly property string resourceRoot: {
+        var resolved = Qt.resolvedUrl("../");
+        if (fileIO && typeof fileIO.toLocalFile === "function") {
+          var local = fileIO.toLocalFile(resolved);
+          if (local)
+            return local;
+        }
+        return resolved.toString();
+      }
+      readonly property string writableRoot: {
+        var appData = fileIO && typeof fileIO.appDataPath === "function" ? fileIO.appDataPath() : "";
+        return appData ? appData + "/plugins/musescore-xen-tuner" : "";
+      }
       
       id: pluginId
+
+      function ensureWritablePaths() {
+        if (!writableRoot || !fileIO || typeof fileIO.makePath !== "function")
+          return false;
+        return fileIO.makePath(writableRoot + "/logs") &&
+          fileIO.makePath(writableRoot + "/cache") &&
+          fileIO.makePath(writableRoot + "/config");
+      }
 
       Component.onCompleted : {
         if (mscoreMajorVersion >= 4) {
@@ -61,12 +80,23 @@ MuseScore {
 
       onRun: {
         var isMS4 = mscoreMajorVersion >= 4;
-        Fns.init(Accidental, NoteType, SymId, Element,
-          fileIO, curScore, isMS4, pluginHomePath);
-        Fns.preAction();
-        Fns.log('Xen Tuner - Display Cents');
-
-        Fns.operationTune(1);
-        Fns.postAction();
+        var actionStarted = false;
+        try {
+          if (!ensureWritablePaths())
+            console.warn("Xen Tuner writable data directory is unavailable: " + writableRoot);
+          Fns.init(Accidental, NoteType, SymId, Element,
+            fileIO, curScore, isMS4, resourceRoot, writableRoot);
+          Fns.preAction();
+          actionStarted = true;
+          Fns.log('Xen Tuner - Display Cents');
+          Fns.operationTune(1);
+        } finally {
+          try {
+            if (actionStarted)
+              Fns.postAction();
+          } finally {
+            Qt.quit();
+          }
+        }
       }
 }

@@ -401,7 +401,7 @@ function formatLogTimestamp(date) {
 
 function getDailyLogRelativePath(date) {
     date = date || new Date();
-    return "logs/" + formatLogDate(date) + ".log";
+    return USER_LOG_DIR + formatLogDate(date) + ".log";
 }
 
 function normalizeLogValue(value) {
@@ -1101,12 +1101,12 @@ function getCurrentAuxButtonGroupsForPanel() {
 function writeDailyLogLine(message) {
     var date = new Date();
     var line = formatLogTimestamp(date) + " " + message;
-    var logPath = pluginHomePath + getDailyLogRelativePath(date);
+    var logPath = pluginWritablePath + getDailyLogRelativePath(date);
 
-    if (fileIO && pluginHomePath) {
+    if (fileIO && pluginWritablePath) {
         try {
             fileIO.source = logPath;
-            var existingLog = fileIO.read();
+            var existingLog = fileIO.exists() ? fileIO.read() : "";
             if (existingLog === undefined || existingLog === null)
                 existingLog = "";
             if (existingLog.length > 0 && existingLog.charAt(existingLog.length - 1) != "\n")
@@ -1115,23 +1115,6 @@ function writeDailyLogLine(message) {
                 return true;
         } catch (fileError) {
             console.error("Failed to write Xen Tuner operation log: " + fileError);
-        }
-    }
-
-    if (typeof openLog === "function" &&
-        typeof logn === "function" &&
-        typeof closeLog === "function" &&
-        pluginHomePath) {
-        try {
-            openLog(logPath);
-            logn(line);
-            closeLog();
-            return true;
-        } catch (e) {
-            try {
-                closeLog();
-            } catch (e2) { }
-            console.error("Failed to write Xen Tuner operation log: " + e);
         }
     }
 
@@ -1171,7 +1154,8 @@ function log(msg) {
  */
 function preAction() {
     applyProjectConfig();
-    if (DEBUG_LOG) openLog(pluginHomePath + "logs/xen tuner.log");
+    if (DEBUG_LOG && pluginWritablePath)
+        openLog(pluginWritablePath + USER_LOG_DIR + "xen tuner.log");
 }
 
 /**
@@ -1202,13 +1186,46 @@ function parseProjectConfigBoolean(value, fallback, fieldName) {
     return fallback;
 }
 
+function readRuntimeTextFile(path) {
+    if (!fileIO || !path)
+        return "";
+
+    fileIO.source = path;
+    if (!fileIO.exists())
+        return "";
+    return fileIO.read() || "";
+}
+
+/**
+ * Load the bundled default configuration and copy it to the writable user
+ * directory on first run.  The copy gives users a stable place to override
+ * playback settings without attempting to modify the packaged resources.
+ */
+function loadProjectConfigText() {
+    var bundledConfig = readRuntimeTextFile(pluginHomePath + PROJECT_CONFIG_FILE);
+    if (!pluginWritablePath)
+        return bundledConfig;
+
+    var userConfigPath = pluginWritablePath + USER_CONFIG_DIR + PROJECT_CONFIG_FILE;
+    if (typeof fileIO.makePath === "function")
+        fileIO.makePath(pluginWritablePath + USER_CONFIG_DIR);
+
+    fileIO.source = userConfigPath;
+    if (!fileIO.exists() && bundledConfig.trim().length > 0) {
+        if (!fileIO.write(bundledConfig))
+            console.warn("Unable to create Xen Tuner user config: " + userConfigPath);
+    }
+
+    var userConfig = readRuntimeTextFile(userConfigPath);
+    return userConfig.trim().length > 0 ? userConfig : bundledConfig;
+}
+
 function applyProjectConfig() {
     var autoDetect = false;
     var preferPlaybackTimbre = false;
 
     if (fileIO && pluginHomePath) {
-        fileIO.source = pluginHomePath + PROJECT_CONFIG_FILE;
-        var configText = fileIO.read() || "";
+        var configText = loadProjectConfigText();
         configText = configText.trim();
 
         if (configText.length > 0) {
@@ -1340,15 +1357,24 @@ function normalizePluginHomePath(path) {
 
     if (strStartsWith(path, "file:///")) {
         path = path.slice(8);
+        try {
+            path = decodeURIComponent(path);
+        } catch (e) { }
     } else if (strStartsWith(path, "file://")) {
-        path = path.slice(7);
+        // Preserve the leading double slash for UNC paths on Windows.
+        path = "//" + path.slice(7);
+        try {
+            path = decodeURIComponent(path);
+        } catch (e2) { }
     }
 
     path = path.replace(/\\/g, "/");
     if (path.length > 0 && path.charAt(path.length - 1) != "/") {
         path += "/";
     }
-    if (path.length > 0 && path.match(/^\w:/g) == null && path.charAt(0) != "/") {
+    var isDrivePath = path.match(/^[A-Za-z]:\//) != null;
+    var isVirtualPath = strStartsWith(path, "qrc:/") || strStartsWith(path, ":/");
+    if (path.length > 0 && !isDrivePath && !isVirtualPath && path.charAt(0) != "/") {
         path = "/" + path;
     }
 
@@ -1362,7 +1388,8 @@ function setCurrentScore(MSCurScore) {
     }
 }
 
-function init(MSAccidental, MSNoteType, MSSymId, MSElement, MSFileIO, MSCurScore, _isMS4, MSPluginHomePath) {
+function init(MSAccidental, MSNoteType, MSSymId, MSElement, MSFileIO, MSCurScore,
+    _isMS4, MSPluginHomePath, MSPluginWritablePath) {
     Lookup = ImportLookup();
     // log(JSON.stringify(Lookup));
     Accidental = MSAccidental;
@@ -1379,9 +1406,20 @@ function init(MSAccidental, MSNoteType, MSSymId, MSElement, MSFileIO, MSCurScore
         delete tuningConfigCache['!default!'];
     }
     pluginHomePath = nextPluginHomePath;
-    if (DEBUG_LOG) {
-        openLog(pluginHomePath + "logs/xen tuner.log");
-        log("Home path: " + pluginHomePath);
+    pluginWritablePath = normalizePluginHomePath(MSPluginWritablePath);
+
+    // QML normally creates these directories before calling init().  Keep the
+    // runtime defensive for older plugin entry points and headless tests.
+    if (fileIO && pluginWritablePath && typeof fileIO.makePath === "function") {
+        fileIO.makePath(pluginWritablePath + USER_LOG_DIR);
+        fileIO.makePath(pluginWritablePath + USER_CACHE_DIR);
+        fileIO.makePath(pluginWritablePath + USER_CONFIG_DIR);
+    }
+
+    if (DEBUG_LOG && pluginWritablePath) {
+        openLog(pluginWritablePath + USER_LOG_DIR + "xen tuner.log");
+        log("Resource path: " + pluginHomePath);
+        log("Writable path: " + pluginWritablePath);
         log("Initialized! Enharmonic eqv: " + ENHARMONIC_EQUIVALENT_THRESHOLD + " cents");
         closeLog();
     }

@@ -1,2 +1,11 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Runtime sources are shared by Linux, macOS, and Windows packages. Keep their
+# checkout bytes stable so the staging manifest is independent of core.autocrlf.
+*.qml text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+*.ps1 text eol=lf
+*.sh text eol=lf

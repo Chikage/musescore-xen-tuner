@@ -1,9 +1,12 @@
 #!/bin/sh
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-JOB_PATH="$SCRIPT_DIR/midx_writer_job.txt"
+JOB_PATH="${XEN_TUNER_JOB_PATH:-$SCRIPT_DIR/midx_writer_job.txt}"
+if [ "$1" = "--job-path" ] && [ -n "$2" ]; then
+  JOB_PATH="$2"
+fi
 PY_HELPER="$SCRIPT_DIR/midx_python_writer.py"
-FALLBACK_DEBUG="$SCRIPT_DIR/midx_writer_job.debug.log"
+FALLBACK_DEBUG="$(dirname -- "$JOB_PATH")/midx_writer_job.debug.log"
 DEBUG_PATH="$FALLBACK_DEBUG"
 
 if [ -f "$JOB_PATH" ]; then
@@ -43,7 +46,7 @@ else
 fi
 
 log_line "SHELL_PYTHON=$PYTHON_BIN"
-"$PYTHON_BIN" "$PY_HELPER"
+"$PYTHON_BIN" "$PY_HELPER" "$JOB_PATH"
 STATUS=$?
 log_line "SHELL_EXIT=$STATUS"
 exit $STATUS

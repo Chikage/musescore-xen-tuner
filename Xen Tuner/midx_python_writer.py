@@ -1059,8 +1059,15 @@ def write_completion_file(path, pitch_bend_stats):
 
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    job_path = os.path.join(script_dir, "midx_writer_job.txt")
-    fallback_debug_path = os.path.join(script_dir, "midx_writer_job.debug.log")
+    if len(sys.argv) > 1 and sys.argv[1]:
+        job_path = os.path.abspath(sys.argv[1])
+    else:
+        job_path = os.environ.get("XEN_TUNER_JOB_PATH", "")
+        if job_path:
+            job_path = os.path.abspath(job_path)
+        else:
+            job_path = os.path.join(script_dir, "midx_writer_job.txt")
+    fallback_debug_path = os.path.join(os.path.dirname(job_path), "midx_writer_job.debug.log")
 
     try:
         job = read_job(job_path)

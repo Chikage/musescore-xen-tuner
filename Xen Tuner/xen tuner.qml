@@ -27,7 +27,7 @@ import QtQuick 2.9
 import QtQuick.Controls 2.2
 import QtQuick.Window 2.2
 import QtQuick.Layouts 1.2
-import QtQuick.Dialogs 1.1
+import QtQuick.Dialogs
 import FileIO 3.0
 
 MuseScore {
@@ -57,6 +57,10 @@ MuseScore {
     readonly property int iconButtonWidth: Math.max(controlRowHeight, Math.ceil(quitCharWidth * 2 + controlHorizontalPadding))
     readonly property int actionButtonMinWidth: Math.ceil(controlCharWidth * 5 + controlHorizontalPadding * 2)
     readonly property int actionButtonPreferredWidth: Math.ceil(controlCharWidth * 12 + controlHorizontalPadding * 2)
+    readonly property int comboIndicatorWidth: Math.max(10, Math.round(controlRowHeight * 0.3))
+    readonly property int comboIndicatorHeight: Math.max(6, Math.round(controlRowHeight * 0.18))
+    readonly property int comboIndicatorMargin: Math.max(4, Math.round(controlHorizontalPadding / 2))
+    readonly property int comboRightPadding: comboIndicatorWidth + comboIndicatorMargin * 2
     readonly property int panelMargin: 14
     readonly property int panelRowSpacing: 10
     readonly property int panelColumnSpacing: 10
@@ -68,8 +72,8 @@ MuseScore {
     readonly property int auxButtonGroupCount: auxButtonGroups ? auxButtonGroups.length : 0
     readonly property int auxButtonAreaHeight: auxButtonGroupCount > 0 ? auxButtonGroupCount * controlRowHeight + (auxButtonGroupCount - 1) * panelRowSpacing : 0
     readonly property int auxButtonSectionHeight: auxButtonAreaHeight > 0 ? auxButtonAreaHeight + panelRowSpacing : 0
-    readonly property int filteredAuxTargetInputWidth: Math.ceil(controlCharWidth * 8 + controlHorizontalPadding * 2)
-    readonly property int filteredAuxChainInputWidth: Math.ceil(controlCharWidth * 5 + controlHorizontalPadding * 2)
+    readonly property int filteredAuxTargetInputWidth: Math.ceil(controlCharWidth * 8 + controlHorizontalPadding + comboRightPadding)
+    readonly property int filteredAuxChainInputWidth: Math.ceil(controlCharWidth * 5 + controlHorizontalPadding + comboRightPadding)
     readonly property int filteredAuxControlMinWidth: filteredAuxTargetInputWidth + filteredAuxChainInputWidth + actionButtonMinWidth * 2 + panelColumnSpacing * 3
     readonly property int filteredAuxSectionHeight: controlRowHeight + panelRowSpacing
     readonly property var filteredAuxTargetOptions: ["C", "D", "E", "F", "G", "A", "B"]
@@ -81,7 +85,22 @@ MuseScore {
     implicitHeight: panelHeight
     implicitWidth: panelWidth
     readonly property var window: Window.window
-    readonly property var pluginHomePath: Qt.resolvedUrl("../").replace("file:///", "")
+    // Resources may live inside a read-only application bundle.  Resolve the
+    // URL through FileIO so Windows drive letters and percent-escaped paths are
+    // handled by QUrl instead of hand-written string slicing.
+    readonly property string resourceRoot: {
+        var resolved = Qt.resolvedUrl("../");
+        if (fileIO && typeof fileIO.toLocalFile === "function") {
+            var local = fileIO.toLocalFile(resolved);
+            if (local)
+                return local;
+        }
+        return resolved.toString();
+    }
+    readonly property string writableRoot: {
+        var appData = fileIO && typeof fileIO.appDataPath === "function" ? fileIO.appDataPath() : "";
+        return appData ? appData + "/plugins/musescore-xen-tuner" : "";
+    }
     property bool allowClose: false
     property var lastScoreRef: null
     property string lastScoreIdentity: ""
@@ -157,6 +176,14 @@ MuseScore {
         return options;
     }
 
+    function ensureWritablePaths() {
+        if (!writableRoot || !fileIO || typeof fileIO.makePath !== "function")
+            return false;
+        return fileIO.makePath(writableRoot + "/logs") &&
+            fileIO.makePath(writableRoot + "/cache") &&
+            fileIO.makePath(writableRoot + "/config");
+    }
+
     function isButtonOperationActive(operationId) {
         return buttonOperationInProgress && activeButtonOperationId == operationId;
     }
@@ -172,8 +199,11 @@ MuseScore {
     }
 
     function ensureInitialPanelSize() {
-        if (height < pluginId.panelHeight) {
-            height = pluginId.panelHeight;
+        if (pluginId.height < pluginId.panelHeight) {
+            pluginId.height = pluginId.panelHeight;
+        }
+        if (pluginId.width < pluginId.panelWidth) {
+            pluginId.width = pluginId.panelWidth;
         }
     }
 
@@ -200,13 +230,17 @@ MuseScore {
         // console.log(JSON.stringify(Fns));
 
         var isMS4 = mscoreMajorVersion >= 4;
-        Fns.init(Accidental, NoteType, SymId, Element, fileIO, curScore, isMS4, pluginHomePath);
+        if (!ensureWritablePaths())
+            console.warn("Xen Tuner writable data directory is unavailable: " + writableRoot);
+        Fns.init(Accidental, NoteType, SymId, Element, fileIO, curScore, isMS4,
+            resourceRoot, writableRoot);
         lastScoreRef = curScore;
         lastScoreIdentity = scoreIdentity();
         infoText.text = Fns.getStartupTuningLogText();
         refreshAuxButtons();
         Fns.logOperation("Start Xen Tuner");
-        console.log('present working dir: ' + pluginHomePath);
+        console.log('resource directory: ' + resourceRoot);
+        console.log('writable directory: ' + writableRoot);
         scheduleInitialPanelSize();
     }
 
@@ -227,12 +261,11 @@ MuseScore {
     FileDialog {
         id: keySignatureFileDialog
         title: "加载调号"
-        folder: Qt.resolvedUrl("../Key Signature")
+        currentFolder: Qt.resolvedUrl("../Key Signature")
         nameFilters: ["Key Signature JSON (*.json)", "JSON files (*.json)", "All files (*)"]
-        selectExisting: true
-        selectMultiple: false
+        fileMode: FileDialog.OpenFile
         onAccepted: {
-            var selectedFileUrl = keySignatureFileDialog.fileUrl;
+            var selectedFileUrl = keySignatureFileDialog.selectedFile;
             pluginId.beginButtonOperation("load-key-signature", function () {
                 pluginId.runLoadKeySignatureFromUrl(selectedFileUrl);
             });
@@ -241,7 +274,7 @@ MuseScore {
 
     Connections {
         target: pluginId.window
-        onClosing: {
+        function onClosing(close) {
             if (!pluginId.allowClose) {
                 close.accepted = false;
             }
@@ -504,11 +537,28 @@ MuseScore {
                 implicitHeight: pluginId.controlRowHeight
                 font.pixelSize: pluginId.controlTextPixelSize
                 leftPadding: pluginId.controlHorizontalPadding
-                rightPadding: pluginId.controlHorizontalPadding
+                rightPadding: pluginId.comboRightPadding
+                contentItem: TextField {
+                    text: filteredAuxTargetInput.editable ? filteredAuxTargetInput.editText : filteredAuxTargetInput.displayText
+                    font: filteredAuxTargetInput.font
+                    color: "#2C3E50"
+                    selectionColor: "#2980B9"
+                    selectedTextColor: "white"
+                    verticalAlignment: TextInput.AlignVCenter
+                    readOnly: !filteredAuxTargetInput.editable
+                    validator: filteredAuxTargetInput.validator
+                    inputMethodHints: filteredAuxTargetInput.inputMethodHints
+                    selectByMouse: true
+                    leftPadding: 0
+                    rightPadding: 0
+                    background: Rectangle {
+                        color: "transparent"
+                    }
+                }
                 indicator: Canvas {
-                    width: Math.max(10, Math.round(pluginId.controlRowHeight * 0.3))
-                    height: Math.max(6, Math.round(pluginId.controlRowHeight * 0.18))
-                    x: filteredAuxTargetInput.width - width - Math.max(4, Math.round(pluginId.controlHorizontalPadding / 2))
+                    width: pluginId.comboIndicatorWidth
+                    height: pluginId.comboIndicatorHeight
+                    x: filteredAuxTargetInput.width - width - pluginId.comboIndicatorMargin
                     y: Math.round((filteredAuxTargetInput.height - height) / 2)
 
                     onPaint: {
@@ -548,15 +598,32 @@ MuseScore {
                 implicitHeight: pluginId.controlRowHeight
                 font.pixelSize: pluginId.controlTextPixelSize
                 leftPadding: pluginId.controlHorizontalPadding
-                rightPadding: pluginId.controlHorizontalPadding
+                rightPadding: pluginId.comboRightPadding
                 validator: IntValidator {
                     bottom: 0
                     top: Math.max(1, pluginId.auxChainCount)
                 }
+                contentItem: TextField {
+                    text: filteredAuxChainInput.editable ? filteredAuxChainInput.editText : filteredAuxChainInput.displayText
+                    font: filteredAuxChainInput.font
+                    color: "#2C3E50"
+                    selectionColor: "#2980B9"
+                    selectedTextColor: "white"
+                    verticalAlignment: TextInput.AlignVCenter
+                    readOnly: !filteredAuxChainInput.editable
+                    validator: filteredAuxChainInput.validator
+                    inputMethodHints: filteredAuxChainInput.inputMethodHints
+                    selectByMouse: true
+                    leftPadding: 0
+                    rightPadding: 0
+                    background: Rectangle {
+                        color: "transparent"
+                    }
+                }
                 indicator: Canvas {
-                    width: Math.max(10, Math.round(pluginId.controlRowHeight * 0.3))
-                    height: Math.max(6, Math.round(pluginId.controlRowHeight * 0.18))
-                    x: filteredAuxChainInput.width - width - Math.max(4, Math.round(pluginId.controlHorizontalPadding / 2))
+                    width: pluginId.comboIndicatorWidth
+                    height: pluginId.comboIndicatorHeight
+                    x: filteredAuxChainInput.width - width - pluginId.comboIndicatorMargin
                     y: Math.round((filteredAuxChainInput.height - height) / 2)
 
                     onPaint: {
@@ -910,7 +977,7 @@ MuseScore {
         }
     }
 
-    onScoreStateChanged: {
+    onScoreStateChanged: function(state) {
         if (state.selectionChanged && curScore) {
             var elems = curScore.selection.elements;
             var el = elems[0];
@@ -1088,6 +1155,13 @@ MuseScore {
     }
 
     function keySignatureFilePathFromUrl(fileUrl) {
+        if (fileUrl && fileIO && typeof fileIO.toLocalFile === "function") {
+            try {
+                var localPath = fileIO.toLocalFile(fileUrl);
+                if (localPath)
+                    return localPath;
+            } catch (e) { }
+        }
         var text = fileUrl ? fileUrl.toString() : "";
         if (text.indexOf("file:///") == 0) {
             text = text.slice(8);
@@ -1095,9 +1169,15 @@ MuseScore {
                 text = "/" + text;
             }
         } else if (text.indexOf("file://") == 0) {
-            text = text.slice(7);
+            // Preserve UNC host/share paths when the FileIO URL helper is not
+            // available in an older plugin host.
+            text = "//" + text.slice(7);
         }
-        return decodeURIComponent(text);
+        try {
+            return decodeURIComponent(text);
+        } catch (e2) {
+            return text;
+        }
     }
 
     function appendLoadKeySignatureMessage(message) {

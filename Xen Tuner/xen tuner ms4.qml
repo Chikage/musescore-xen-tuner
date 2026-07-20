@@ -27,7 +27,7 @@ import QtQuick 2.9
 import QtQuick.Controls 2.2
 import QtQuick.Window 2.2
 import QtQuick.Layouts 1.2
-import QtQuick.Dialogs 1.1
+import QtQuick.Dialogs
 import FileIO 3.0
 
 MuseScore {
@@ -74,7 +74,21 @@ MuseScore {
       implicitWidth: panelWidth
       id: pluginId
       readonly property var window: Window.window
-      readonly property var pluginHomePath: Qt.resolvedUrl("../").replace("file:///", "")
+      // Keep the alternate dialog entry point on the same read-only resource /
+      // per-user writable path contract as the dock entry point.
+      readonly property string resourceRoot: {
+        var resolved = Qt.resolvedUrl("../");
+        if (fileIO && typeof fileIO.toLocalFile === "function") {
+          var local = fileIO.toLocalFile(resolved);
+          if (local)
+            return local;
+        }
+        return resolved.toString();
+      }
+      readonly property string writableRoot: {
+        var appData = fileIO && typeof fileIO.appDataPath === "function" ? fileIO.appDataPath() : "";
+        return appData ? appData + "/plugins/musescore-xen-tuner" : "";
+      }
       property bool allowClose: false
       property var lastScoreRef: null
       property string lastScoreIdentity: ""
@@ -156,6 +170,14 @@ MuseScore {
         return true;
       }
 
+      function ensureWritablePaths() {
+        if (!writableRoot || !fileIO || typeof fileIO.makePath !== "function")
+          return false;
+        return fileIO.makePath(writableRoot + "/logs") &&
+          fileIO.makePath(writableRoot + "/cache") &&
+          fileIO.makePath(writableRoot + "/config");
+      }
+
       function ensureInitialPanelSize() {
         if (height < pluginId.panelHeight) {
           height = pluginId.panelHeight;
@@ -180,14 +202,17 @@ MuseScore {
         // console.log(JSON.stringify(Fns));
 
         var isMS4 = mscoreMajorVersion >= 4;
+        if (!ensureWritablePaths())
+          console.warn("Xen Tuner writable data directory is unavailable: " + writableRoot);
         Fns.init(Accidental, NoteType, SymId, Element,
-          fileIO, curScore, isMS4, pluginHomePath);
+          fileIO, curScore, isMS4, resourceRoot, writableRoot);
         lastScoreRef = curScore;
         lastScoreIdentity = scoreIdentity();
         infoText.text = Fns.getStartupTuningLogText();
         refreshAuxButtons();
         Fns.logOperation("Start Xen Tuner");
-        console.log('present working dir: ' + pluginHomePath);
+        console.log('resource directory: ' + resourceRoot);
+        console.log('writable directory: ' + writableRoot);
         scheduleInitialPanelSize();
       }
 
@@ -218,12 +243,11 @@ MuseScore {
       FileDialog {
         id: keySignatureFileDialog
         title: "加载调号"
-        folder: Qt.resolvedUrl("../Key Signature")
+        currentFolder: Qt.resolvedUrl("../Key Signature")
         nameFilters: ["Key Signature JSON (*.json)", "JSON files (*.json)", "All files (*)"]
-        selectExisting: true
-        selectMultiple: false
+        fileMode: FileDialog.OpenFile
         onAccepted: {
-          var selectedFileUrl = keySignatureFileDialog.fileUrl;
+          var selectedFileUrl = keySignatureFileDialog.selectedFile;
           pluginId.beginButtonOperation("load-key-signature", function () {
             pluginId.runLoadKeySignatureFromUrl(selectedFileUrl);
           });
@@ -234,7 +258,7 @@ MuseScore {
       onWindowChanged: scheduleInitialPanelSize()
       Connections {
         target: pluginId.window
-        onClosing: {
+        function onClosing(close) {
           if (!pluginId.allowClose) {
             close.accepted = false;
           }
@@ -705,7 +729,7 @@ GridLayout {
         }
       }
 
-      onScoreStateChanged: {
+      onScoreStateChanged: function(state) {
         if (state.selectionChanged && curScore) {
             var elems = curScore.selection.elements;
             var el = elems[0];
@@ -855,6 +879,13 @@ GridLayout {
       }
 
       function keySignatureFilePathFromUrl(fileUrl) {
+        if (fileUrl && fileIO && typeof fileIO.toLocalFile === "function") {
+          try {
+            var localPath = fileIO.toLocalFile(fileUrl);
+            if (localPath)
+              return localPath;
+          } catch (e) { }
+        }
         var text = fileUrl ? fileUrl.toString() : "";
         if (text.indexOf("file:///") == 0) {
           text = text.slice(8);
@@ -862,9 +893,15 @@ GridLayout {
             text = "/" + text;
           }
         } else if (text.indexOf("file://") == 0) {
-          text = text.slice(7);
+          // Preserve UNC host/share paths when the FileIO URL helper is not
+          // available in an older plugin host.
+          text = "//" + text.slice(7);
         }
-        return decodeURIComponent(text);
+        try {
+          return decodeURIComponent(text);
+        } catch (e2) {
+          return text;
+        }
       }
 
       function appendLoadKeySignatureMessage(message) {

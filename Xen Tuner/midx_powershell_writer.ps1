@@ -1,9 +1,13 @@
+param(
+    [string] $JobPath = ""
+)
+
 $ErrorActionPreference = "Continue"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$jobPath = Join-Path $scriptDir "midx_writer_job.txt"
+$jobPath = if ($JobPath) { $JobPath } else { Join-Path $scriptDir "midx_writer_job.txt" }
 $pyHelper = Join-Path $scriptDir "midx_python_writer.py"
-$fallbackDebugPath = Join-Path $scriptDir "midx_writer_job.debug.log"
+$fallbackDebugPath = Join-Path (Split-Path -Parent $jobPath) "midx_writer_job.debug.log"
 $debugPath = $fallbackDebugPath
 
 if (Test-Path -LiteralPath $jobPath) {
@@ -52,7 +56,7 @@ Write-HelperLog "POWERSHELL_PY_HELPER=$pyHelper"
 $pyLauncher = Get-ExistingCommand @("C:\Windows\py.exe", "py.exe", "py")
 if ($pyLauncher) {
     Write-HelperLog "POWERSHELL_PYTHON=$pyLauncher -3 -u"
-    & $pyLauncher -3 -u $pyHelper
+    & $pyLauncher -3 -u $pyHelper $jobPath
     $status = $LASTEXITCODE
     Write-HelperLog "POWERSHELL_EXIT=$status"
     exit $status
@@ -71,7 +75,7 @@ $python = Get-ExistingCommand @(
 )
 if ($python) {
     Write-HelperLog "POWERSHELL_PYTHON=$python -u"
-    & $python -u $pyHelper
+    & $python -u $pyHelper $jobPath
     $status = $LASTEXITCODE
     Write-HelperLog "POWERSHELL_EXIT=$status"
     exit $status

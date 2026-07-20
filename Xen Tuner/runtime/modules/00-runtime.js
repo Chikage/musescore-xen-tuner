@@ -18,9 +18,15 @@ var SymId = null; // WARNING: SymId has a long loading time.
 /** @type {FileIO} */
 var fileIO;
 /**
- * Contains the home directory of the plugin
+ * Read-only directory containing the packaged plugin resources.
+ *
+ * The plugin may be installed below a read-only application bundle (for
+ * example an AppImage, macOS bundle, or Program Files on Windows).  Keep
+ * this path separate from the per-user data directory below.
  */
 var pluginHomePath = '';
+/** Writable per-user directory for logs, cache data, and configuration. */
+var pluginWritablePath = '';
 /** @type {PluginAPIScore} */
 var _curScore = null; // don't clash with namespace
 
@@ -148,6 +154,9 @@ var PLAY_EVENT_MOD_SEMITONES_THRESHOLD = 12;
 var PLAY_EVENT_PREVIEW_CONSISTENCY_THRESHOLD = 1000;
 var PLAY_EVENT_PLAYBACK_TIMBRE_THRESHOLD = 1;
 var PROJECT_CONFIG_FILE = "xen-tuner.config.json";
+var USER_CONFIG_DIR = "config/";
+var USER_CACHE_DIR = "cache/";
+var USER_LOG_DIR = "logs/";
 var DEFAULT_TUNINGS_DIR = "tunings/";
 var playbackOptimizationAutoDetect = false;
 var playbackOptimizationPreferPlaybackTimbre = false;

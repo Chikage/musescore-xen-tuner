@@ -23,8 +23,7 @@ import MuseScore 3.0
 import QtQuick 2.9
 import QtQuick.Controls 2.2
 import QtQuick.Layouts 1.2
-import Qt.labs.settings 1.0
-import QtQuick.Dialogs 1.1
+import QtQuick.Dialogs
 import FileIO 3.0
 
 MuseScore {
@@ -34,7 +33,27 @@ MuseScore {
       menuPath: "Plugins.Xen Tuner.Export MIDI CSV"
       
       id: pluginId
-      readonly property var pluginHomePath: Qt.resolvedUrl("../").replace("file:///", "")
+      readonly property string resourceRoot: {
+        var resolved = Qt.resolvedUrl("../");
+        if (fileIO && typeof fileIO.toLocalFile === "function") {
+          var local = fileIO.toLocalFile(resolved);
+          if (local)
+            return local;
+        }
+        return resolved.toString();
+      }
+      readonly property string writableRoot: {
+        var appData = fileIO && typeof fileIO.appDataPath === "function" ? fileIO.appDataPath() : "";
+        return appData ? appData + "/plugins/musescore-xen-tuner" : "";
+      }
+
+      function ensureWritablePaths() {
+        if (!writableRoot || !fileIO || typeof fileIO.makePath !== "function")
+          return false;
+        return fileIO.makePath(writableRoot + "/logs") &&
+          fileIO.makePath(writableRoot + "/cache") &&
+          fileIO.makePath(writableRoot + "/config");
+      }
 
       Component.onCompleted : {
         if (mscoreMajorVersion >= 4) {
@@ -56,23 +75,29 @@ MuseScore {
         id: messageDialog
         title: ""
         text: ""
-        onAccepted: {
-          return;
-        }
+        onAccepted: Qt.quit()
+        onRejected: Qt.quit()
       }
 
       onRun: {
         // When you want to find which import has a syntax error, uncomment this line
         // Fns.log(JSON.stringify(Fns));
         var isMS4 = mscoreMajorVersion >= 4;
-        Fns.init(Accidental, NoteType, SymId, Element,
-          fileIO, curScore, isMS4, pluginHomePath);
-        Fns.preAction();
-        Fns.log('Xen Tuner Export MIDI CSV');
+        var actionStarted = false;
+        try {
+          if (!ensureWritablePaths())
+            console.warn("Xen Tuner writable data directory is unavailable: " + writableRoot);
+          Fns.init(Accidental, NoteType, SymId, Element,
+            fileIO, curScore, isMS4, resourceRoot, writableRoot);
+          Fns.preAction();
+          actionStarted = true;
+          Fns.log('Xen Tuner Export MIDI CSV');
 
 
-        if (typeof curScore === 'undefined')
-              return;
+          if (typeof curScore === 'undefined' || !curScore) {
+            Qt.quit();
+            return;
+          }
 
         // Stores midi text to be written to file.
         var midiText = division + '\n';
@@ -305,8 +330,15 @@ MuseScore {
           messageDialog.text = 'failed to export to ' + exportPath + '. See plugin creator logs for details.';
         }
 
-        messageDialog.open();
-        
-        Fns.postAction();
+          messageDialog.open();
+        } catch (e) {
+          console.error('MIDI CSV export failed: ' + e);
+          messageDialog.title = 'MIDI CSV Export Failed';
+          messageDialog.text = 'Unexpected export error: ' + e;
+          messageDialog.open();
+        } finally {
+          if (actionStarted)
+            Fns.postAction();
+        }
       }
 }

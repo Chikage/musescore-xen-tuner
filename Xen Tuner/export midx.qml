@@ -5,7 +5,7 @@
 import MuseScore 3.0
 import QtQuick 2.9
 import QtQuick.Controls 2.2
-import QtQuick.Dialogs 1.1
+import QtQuick.Dialogs
 import FileIO 3.0
 
 MuseScore {
@@ -20,6 +20,29 @@ MuseScore {
       readonly property int midxExperimentalManufacturerId: 0x7D
       readonly property int midxPitchedOffsetRecordType: 0x03
       readonly property real pitchBendRangeSemitones: 2.0
+      readonly property string resourceRoot: {
+        var resolved = Qt.resolvedUrl("../");
+        if (fileIO && typeof fileIO.toLocalFile === "function") {
+          var local = fileIO.toLocalFile(resolved);
+          if (local)
+            return local;
+        }
+        return resolved.toString();
+      }
+      readonly property string writableRoot: {
+        var appData = fileIO && typeof fileIO.appDataPath === "function" ? fileIO.appDataPath() : "";
+        return appData ? appData + "/plugins/musescore-xen-tuner" : "";
+      }
+
+      function ensureWritablePaths() {
+        if (!writableRoot || !fileIO || typeof fileIO.makePath !== "function")
+          return false;
+        return fileIO.makePath(writableRoot + "/cache");
+      }
+
+      function writerJobPath() {
+        return writableRoot ? writableRoot + "/cache/midx_writer_job.txt" : "";
+      }
 
       Component.onCompleted : {
         if (mscoreMajorVersion >= 4) {
@@ -44,9 +67,8 @@ MuseScore {
         id: messageDialog
         title: ""
         text: ""
-        onAccepted: {
-          return;
-        }
+        onAccepted: Qt.quit()
+        onRejected: Qt.quit()
       }
 
       function clampNumber(value, min, max) {
@@ -429,7 +451,13 @@ MuseScore {
       }
 
       function pluginDirectoryPath() {
-        return localPathFromUrl(Qt.resolvedUrl("."));
+        var resolved = Qt.resolvedUrl(".");
+        if (fileIO && typeof fileIO.toLocalFile === "function") {
+          var local = fileIO.toLocalFile(resolved);
+          if (local)
+            return local;
+        }
+        return localPathFromUrl(resolved);
       }
 
       function quoteCommandArg(value) {
@@ -509,24 +537,31 @@ MuseScore {
         ].join("");
       }
 
-      function pythonCommandCandidates(scriptPath) {
+      function pythonCommandCandidates(scriptPath, jobPath) {
         var commands = [];
         var os = (Qt.platform && Qt.platform.os) ? Qt.platform.os : "";
         var shellHelperPath = pluginDirectoryPath() + "/midx_shell_writer.sh";
         var powershellHelperPath = pluginDirectoryPath() + "/midx_powershell_writer.ps1";
         var pythonHelperPath = pluginDirectoryPath() + "/midx_python_writer.py";
+        var helperArgs = jobPath ? ["--job-path", jobPath] : [];
+        var powerShellArgs = [
+          "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
+          "-File", powershellHelperPath
+        ];
+        if (jobPath) {
+          powerShellArgs = powerShellArgs.concat(["-JobPath", jobPath]);
+        }
 
         if (os != "windows") {
           commands.push({
             program: shellHelperPath,
-            args: [],
+            args: helperArgs,
             helper: true,
             label: "bundledShellHelper"
           });
           commands.push({
             program: shellHelperPath,
-            args: [],
-            command: quoteCommandArg(shellHelperPath),
+            args: helperArgs,
             label: "bundledShellHelperQuoted"
           });
         }
@@ -534,25 +569,25 @@ MuseScore {
         if (os == "windows") {
           commands.push(
             {
-              command: quoteCommandArg("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe") +
-                " -NoLogo -NoProfile -ExecutionPolicy Bypass -File " + quoteCommandArg(powershellHelperPath),
+              program: "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+              args: powerShellArgs,
               label: "windowsPowerShellFullPathHelper"
             },
             {
-              command: quoteCommandArg("C:/Windows/Sysnative/WindowsPowerShell/v1.0/powershell.exe") +
-                " -NoLogo -NoProfile -ExecutionPolicy Bypass -File " + quoteCommandArg(powershellHelperPath),
+              program: "C:/Windows/Sysnative/WindowsPowerShell/v1.0/powershell.exe",
+              args: powerShellArgs,
               label: "windowsPowerShellSysnativeHelper"
             },
             {
-              command: quoteCommandArg("powershell.exe") +
-                " -NoLogo -NoProfile -ExecutionPolicy Bypass -File " + quoteCommandArg(powershellHelperPath),
+              program: "powershell.exe",
+              args: powerShellArgs,
               label: "windowsPowerShellPathHelper"
             }
           );
         }
 
         if (os != "windows") {
-          commands.push({ program: pythonHelperPath, args: [], helper: true, label: "bundledPythonHelperExecutable" });
+          commands.push({ program: pythonHelperPath, args: jobPath ? [jobPath] : [], helper: true, label: "bundledPythonHelperExecutable" });
         }
 
         if (scriptPath && scriptPath != "") {
@@ -576,12 +611,10 @@ MuseScore {
       }
 
       function commandToString(candidate) {
-        if (candidate.command) {
-          return candidate.command;
-        }
+        var args = candidate.args || [];
         var text = quoteCommandArg(candidate.program);
-        for (var i = 0; i < candidate.args.length; i++) {
-          text += " " + quoteCommandArg(candidate.args[i]);
+        for (var i = 0; i < args.length; i++) {
+          text += " " + quoteCommandArg(args[i]);
         }
         return text;
       }
@@ -648,6 +681,7 @@ MuseScore {
 
       function startProcessCandidate(candidate) {
         var output = "";
+        var args = candidate.args || [];
         var shell = shellCommand(commandToString(candidate) + " 2>&1");
         if (candidate.label) {
           output += "candidateLabel=" + candidate.label + "\n";
@@ -657,15 +691,12 @@ MuseScore {
         output += "startWithArgsAvailable=" + (typeof proc.startWithArgs == "function") + "\n";
 
         try {
-          if (candidate.command) {
-            output += "startMethod=start(commandString)\n";
-            proc.start(candidate.command);
-          } else if (candidate.helper) {
-            output += "startMethod=start(helperProgramNoArgs)\n";
-            proc.start(candidate.program);
-          } else if (typeof proc.startWithArgs == "function") {
+          if (typeof proc.startWithArgs == "function") {
             output += "startMethod=startWithArgs(program,args)\n";
-            proc.startWithArgs(candidate.program, candidate.args);
+            proc.startWithArgs(candidate.program, args);
+          } else if (args.length == 0) {
+            output += "startMethod=start(program)\n";
+            proc.start(candidate.program);
           } else {
             output += "startMethod=start(shellCommand)\n";
             proc.start(shell);
@@ -713,9 +744,15 @@ MuseScore {
         var hexPath = path + ".hex";
         var scriptPath = path + ".write_midx.py";
         var debugPath = path + ".debug.log";
-        var jobPath = pluginDirectoryPath() + "/midx_writer_job.txt";
+        var jobPath = writerJobPath();
+        if (!jobPath) {
+          return {
+            success: false,
+            message: "Xen Tuner writable cache directory is unavailable."
+          };
+        }
         var shellHelperPath = pluginDirectoryPath() + "/midx_shell_writer.sh";
-        var commands = pythonCommandCandidates(scriptPath);
+        var commands = pythonCommandCandidates(scriptPath, jobPath);
         var output = "MIDX Python fallback debug\n";
         output += "platform=" + ((Qt.platform && Qt.platform.os) ? Qt.platform.os : "<unknown>") + "\n";
         output += "pluginDirectory=" + pluginDirectoryPath() + "\n";
@@ -838,9 +875,15 @@ MuseScore {
         var midi2Path = getMidi2ExportPath(path);
         var pitchBendPath = getPitchBendMidiExportPath(path);
         var completionPath = path + ".writer.complete";
-        var jobPath = pluginDirectoryPath() + "/midx_writer_job.txt";
+        var jobPath = writerJobPath();
+        if (!jobPath) {
+          return {
+            success: false,
+            message: "Xen Tuner writable cache directory is unavailable."
+          };
+        }
         var shellHelperPath = pluginDirectoryPath() + "/midx_shell_writer.sh";
-        var commands = pythonCommandCandidates("");
+        var commands = pythonCommandCandidates("", jobPath);
         var ticksPerQuarter = (typeof division === "undefined") ? 480 : division;
         var output = "MIDX native MIDI injection debug\n";
         output += "platform=" + ((Qt.platform && Qt.platform.os) ? Qt.platform.os : "<unknown>") + "\n";
@@ -1272,24 +1315,33 @@ MuseScore {
       onRun: {
         console.log("Export MIDX");
 
-        if (typeof curScore === "undefined" || !curScore) {
+        if (!ensureWritablePaths()) {
+          messageDialog.title = "Microtonal MIDI Export Failed";
+          messageDialog.text = "Xen Tuner cache directory is unavailable: " + writableRoot;
+          messageDialog.open();
           return;
         }
 
-        curScore.createPlayEvents();
+        if (typeof curScore === "undefined" || !curScore) {
+          Qt.quit();
+          return;
+        }
 
-        var noteEvents = [];
-        var tempoEvents = [];
-        var cursor = curScore.newCursor();
-        var range = getExportRange(cursor);
+        try {
+          curScore.createPlayEvents();
 
-        collectMidxEvents(noteEvents, tempoEvents, range);
+          var noteEvents = [];
+          var tempoEvents = [];
+          var cursor = curScore.newCursor();
+          var range = getExportRange(cursor);
 
-        var ticksPerQuarter = (typeof division === "undefined") ? 480 : division;
-        var exportPath = getExportPath();
-        var result = writeMidxFile(exportPath, ticksPerQuarter, tempoEvents, noteEvents);
+          collectMidxEvents(noteEvents, tempoEvents, range);
 
-        if (result.success) {
+          var ticksPerQuarter = (typeof division === "undefined") ? 480 : division;
+          var exportPath = getExportPath();
+          var result = writeMidxFile(exportPath, ticksPerQuarter, tempoEvents, noteEvents);
+
+          if (result.success) {
           var warning = "";
           if (result.channelSteals > 0) {
             warning += "\nWarning: " + result.channelSteals +
@@ -1311,9 +1363,15 @@ MuseScore {
             ".\nNote events: " + noteEvents.length +
             ", offsets: " + countOffsetEvents(noteEvents) +
             ".\nWriter: " + result.method + "." + warning;
-        } else {
+          } else {
+            console.error("Microtonal MIDI export failed: " + result.message);
+            messageDialog.title = "Microtonal MIDI Export Failed";
+            messageDialog.text = "failed to export to " + exportPath + ".\n" + result.message;
+          }
+        } catch (e) {
+          console.error("Microtonal MIDI export failed: " + e);
           messageDialog.title = "Microtonal MIDI Export Failed";
-          messageDialog.text = "failed to export to " + exportPath + ".\n" + result.message;
+          messageDialog.text = "Unexpected export error: " + e;
         }
 
         messageDialog.open();
