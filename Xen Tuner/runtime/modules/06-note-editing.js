@@ -28,8 +28,8 @@
  *  will not be altered/removed by this function.
  * @param {Object?} options
  * @param {boolean?} options.forceAttached
- *  If true, render even a single native-compatible symbol as an attached
- *  Symbol/Fingering. Hidden TPC carriers always imply this option.
+ *  If true, preserve a hidden native TPC carrier while rendering the supplied
+ *  spelling as attached Symbol/Fingering elements. Hidden carriers imply it.
  * @param {boolean?} options.clearAttached
  *  If true, allow a null accidental to clear attached glyphs from a hidden
  *  carrier. Used only for implicit tied continuations, which inherit the head.
@@ -85,18 +85,9 @@ function setAccidental(note, orderedSymbols, newElement, tuningConfig, options) 
         return;
     }
 
-    // Prefer MuseScore's native accidental element whenever the requested
-    // spelling is exactly one supported SMuFL accidental. This gives native
-    // layout, accidental carry, selection, import/export and enharmonic
-    // behavior while retaining plugin Symbols for compound/ASCII spellings.
-    if (!forceAttached && orderedSymbols.length == 1 &&
-        setMuseScoreNativeAccidentalSymbol(note, orderedSymbols[0])) {
-        return;
-    }
-
-    // A compound/plugin accidental replaces the native accidental rather than
-    // stacking on top of it. A hidden native accidental is retained only when
-    // it carries a pitch-compatible TPC for a Xen enharmonic spelling.
+    // Plugin-owned accidental symbols replace the visible native accidental
+    // rather than stacking on top of it. A hidden native accidental is retained
+    // only when it carries a pitch-compatible TPC for a Xen enharmonic spelling.
     // Force-attached mode is used only with a pitch-compatible carrier. Never
     // write accidentalType=NONE in that mode: tied continuations may already
     // have the new TPC while their temporary line still has the old value.

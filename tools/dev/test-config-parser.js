@@ -573,11 +573,17 @@ noteDuringTuningSwitch.remove = function (element) {
 noteDuringTuningSwitch.add = function (element) {
     this.elements.push(element);
 };
+var originalElementForStandardAccidental = context.Element;
+var originalSymIdForStandardAccidental = context.SymId;
+var standardSharpLabel = context.Lookup.CODE_TO_LABELS[5][0];
+context.Element = { SYMBOL: "SYMBOL", FINGERING: "FINGERING" };
+context.SymId = {};
+context.SymId[standardSharpLabel] = standardSharpLabel;
 context.setAccidental(
     noteDuringTuningSwitch,
     [5],
-    function () {
-        throw new Error("single native sharp should not require a plugin element");
+    function (type) {
+        return { name: type == "FINGERING" ? "Fingering" : "Symbol" };
     },
     cReferenceTuningConfig
 );
@@ -591,11 +597,28 @@ assert.notStrictEqual(
     -1,
     "tuning switch should preserve user-owned symbols unknown to the new tuning"
 );
+var attachedSharp = noteDuringTuningSwitch.elements.filter(function (element) {
+    return element.z == 1000 &&
+        context.nativeAccidentalLabelToSymbolCode(element.symbol) == 5;
+});
+assert.strictEqual(
+    attachedSharp.length,
+    1,
+    "tuning switch should replace the stale plugin glyph with an attached sharp"
+);
 assert.strictEqual(
     noteDuringTuningSwitch.accidentalType,
-    context.Accidental.SHARP,
-    "tuning switch should replace the stale plugin glyph with a native sharp"
+    context.Accidental.NONE,
+    "an attached standard accidental should clear the ineffective native accidental"
 );
+if (originalElementForStandardAccidental === undefined)
+    delete context.Element;
+else
+    context.Element = originalElementForStandardAccidental;
+if (originalSymIdForStandardAccidental === undefined)
+    delete context.SymId;
+else
+    context.SymId = originalSymIdForStandardAccidental;
 
 function fakeNavigationNote(nativeAccidentalType, tick, line) {
     var note = fakeNote(null, [], nativeAccidentalType);
