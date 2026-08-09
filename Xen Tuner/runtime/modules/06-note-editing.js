@@ -65,15 +65,6 @@ function setAccidental(note, orderedSymbols, newElement, tuningConfig) {
         return;
     }
 
-    // Prefer MuseScore's native accidental element whenever the requested
-    // spelling is exactly one supported SMuFL accidental. This gives native
-    // layout, accidental carry, selection, import/export and enharmonic
-    // behavior while retaining plugin Symbols for compound/ASCII spellings.
-    if (orderedSymbols.length == 1 &&
-        setMuseScoreNativeAccidentalSymbol(note, orderedSymbols[0])) {
-        return;
-    }
-
     // A compound/plugin accidental replaces the native accidental rather than
     // stacking on top of it. Its symbols below become the sole explicit state.
     clearMuseScoreNativeAccidental(note);
